@@ -1,4 +1,5 @@
 import sys
+import time
 
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
@@ -39,12 +40,21 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 		page.wait_for_load_state("networkidle")
 		print(f"请在浏览器中扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
 
-		# 等待登录成功：检测 cookie 中出现 wt2（核心身份凭证）
-		page.wait_for_function(
-			"() => document.cookie.includes('wt2=')",
-			timeout=timeout * 1000,
-		)
-		# 登录成功后等待页面跳转完成
+		# 轮询 context.cookies() 检测 wt2 出现（避免跨域 document.cookie 限制）
+		deadline = time.time() + timeout
+		logged_in = False
+		while time.time() < deadline:
+			cookies_list = context.cookies()
+			if any(c["name"] == "wt2" for c in cookies_list):
+				logged_in = True
+				break
+			time.sleep(1)
+
+		if not logged_in:
+			browser.close()
+			raise TimeoutError(f"扫码登录超时（{timeout}秒）")
+
+		# 登录成功后等一下让页面稳定
 		page.wait_for_timeout(2000)
 
 		cookies_list = context.cookies()
