@@ -9,6 +9,33 @@ _stealth = Stealth()
 LOGIN_URL = "https://login.zhipin.com/?ka=header-login"
 HOME_URL = "https://www.zhipin.com/"
 
+# 尝试使用系统 Chrome，失败则回退到 Playwright Chromium
+_LAUNCH_OPTIONS = [
+	{"channel": "chrome"},   # 系统 Chrome（最难被检测）
+	{"channel": "msedge"},   # 系统 Edge
+	{},                      # Playwright 自带 Chromium（兜底）
+]
+
+
+def _launch_browser(playwright, *, headless: bool = False):
+	for opts in _LAUNCH_OPTIONS:
+		try:
+			browser = playwright.chromium.launch(
+				headless=headless,
+				args=[
+					"--disable-blink-features=AutomationControlled",
+					"--no-first-run",
+					"--no-default-browser-check",
+				],
+				**opts,
+			)
+			channel = opts.get("channel", "chromium")
+			print(f"使用浏览器: {channel}", file=sys.stderr)
+			return browser
+		except Exception:
+			continue
+	raise RuntimeError("未找到可用的浏览器，请安装 Chrome 或运行 playwright install chromium")
+
 
 def _make_context(browser, *, user_agent: str | None = None):
 	params = {
@@ -23,24 +50,16 @@ def _make_context(browser, *, user_agent: str | None = None):
 
 def login_via_browser(*, timeout: int = 120) -> dict:
 	with sync_playwright() as p:
-		browser = p.chromium.launch(
-			headless=False,
-			args=[
-				"--disable-blink-features=AutomationControlled",
-				"--no-first-run",
-				"--no-default-browser-check",
-			],
-		)
+		browser = _launch_browser(p, headless=False)
 		context = _make_context(browser)
 		page = context.new_page()
 		_stealth.apply_stealth_sync(page)
 
-		# 直接访问登录页
 		page.goto(LOGIN_URL, wait_until="domcontentloaded")
 		page.wait_for_load_state("networkidle")
 		print(f"请在浏览器中扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
 
-		# 轮询 context.cookies() 检测 wt2 出现（避免跨域 document.cookie 限制）
+		# 轮询 context.cookies() 检测 wt2 出现
 		deadline = time.time() + timeout
 		logged_in = False
 		while time.time() < deadline:
@@ -54,7 +73,6 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 			browser.close()
 			raise TimeoutError(f"扫码登录超时（{timeout}秒）")
 
-		# 登录成功后等一下让页面稳定
 		page.wait_for_timeout(2000)
 
 		cookies_list = context.cookies()
@@ -77,10 +95,7 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 
 def refresh_stoken(cookies: dict, user_agent: str) -> str:
 	with sync_playwright() as p:
-		browser = p.chromium.launch(
-			headless=True,
-			args=["--disable-blink-features=AutomationControlled"],
-		)
+		browser = _launch_browser(p, headless=True)
 		context = _make_context(browser, user_agent=user_agent)
 		for name, value in cookies.items():
 			context.add_cookies([{
