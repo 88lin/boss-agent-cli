@@ -1,0 +1,60 @@
+from boss_agent_cli.api.endpoints import CITY_CODES, SALARY_CODES, EXPERIENCE_CODES
+from boss_agent_cli.api.models import JobItem, JobDetail
+
+
+def test_city_code_lookup():
+	assert CITY_CODES["北京"] == "101010100"
+	assert CITY_CODES["杭州"] == "101210100"
+	assert "火星" not in CITY_CODES
+
+
+def test_salary_code_lookup():
+	assert SALARY_CODES["10-20K"] == "405"
+	assert SALARY_CODES["20-50K"] == "406"
+
+
+def test_experience_code_lookup():
+	assert EXPERIENCE_CODES["应届"] == "108"
+	assert EXPERIENCE_CODES["3-5年"] == "104"
+
+
+def test_job_item_from_api():
+	raw = {
+		"encryptJobId": "abc123",
+		"jobName": "Golang 工程师",
+		"brandName": "字节跳动",
+		"salaryDesc": "25-50K·15薪",
+		"cityName": "北京",
+		"jobExperience": "3-5年",
+		"jobDegree": "本科",
+		"bossName": "张先生",
+		"bossTitle": "技术总监",
+		"bossOnline": True,
+		"securityId": "sec_xxx",
+	}
+	job = JobItem.from_api(raw)
+	assert job.job_id == "abc123"
+	assert job.title == "Golang 工程师"
+	assert job.company == "字节跳动"
+	assert job.security_id == "sec_xxx"
+
+
+def test_job_item_to_dict():
+	raw = {
+		"encryptJobId": "abc123",
+		"jobName": "Golang 工程师",
+		"brandName": "字节跳动",
+		"salaryDesc": "25-50K",
+		"cityName": "北京",
+		"jobExperience": "3-5年",
+		"jobDegree": "本科",
+		"bossName": "张先生",
+		"bossTitle": "CTO",
+		"bossOnline": False,
+		"securityId": "sec_001",
+	}
+	job = JobItem.from_api(raw)
+	d = job.to_dict()
+	assert d["job_id"] == "abc123"
+	assert d["boss_active"] == "离线"
+	assert d["greeted"] is False
