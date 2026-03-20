@@ -9,14 +9,36 @@ LOGIN_URL = "https://login.zhipin.com/?ka=header-login"
 HOME_URL = "https://www.zhipin.com/"
 
 
+def _make_context(browser, *, user_agent: str | None = None):
+	params = {
+		"viewport": {"width": 1280, "height": 800},
+		"locale": "zh-CN",
+		"timezone_id": "Asia/Shanghai",
+	}
+	if user_agent:
+		params["user_agent"] = user_agent
+	return browser.new_context(**params)
+
+
 def login_via_browser(*, timeout: int = 120) -> dict:
 	with sync_playwright() as p:
-		browser = p.chromium.launch(headless=False)
-		context = browser.new_context()
+		browser = p.chromium.launch(
+			headless=False,
+			args=[
+				"--disable-blink-features=AutomationControlled",
+				"--no-first-run",
+				"--no-default-browser-check",
+			],
+		)
+		context = _make_context(browser)
 		page = context.new_page()
 		_stealth.apply_stealth_sync(page)
 
-		page.goto(LOGIN_URL)
+		# 先访问主站建立 cookie，再跳转登录页
+		page.goto(HOME_URL, wait_until="domcontentloaded")
+		page.wait_for_timeout(1000)
+		page.goto(LOGIN_URL, wait_until="domcontentloaded")
+		page.wait_for_load_state("networkidle")
 		print(f"请在浏览器中扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
 
 		page.wait_for_url(f"{HOME_URL}**", timeout=timeout * 1000)
@@ -37,8 +59,11 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 
 def refresh_stoken(cookies: dict, user_agent: str) -> str:
 	with sync_playwright() as p:
-		browser = p.chromium.launch(headless=True)
-		context = browser.new_context(user_agent=user_agent)
+		browser = p.chromium.launch(
+			headless=True,
+			args=["--disable-blink-features=AutomationControlled"],
+		)
+		context = _make_context(browser, user_agent=user_agent)
 		for name, value in cookies.items():
 			context.add_cookies([{
 				"name": name,
