@@ -51,6 +51,31 @@ def _get_profile_dir() -> Path:
 	return d
 
 
+def _kill_old_debug_chrome(port: int):
+	"""杀死可能占用调试端口的旧 Chrome 进程"""
+	try:
+		subprocess.run(
+			["pkill", "-f", f"remote-debugging-port={port}"],
+			capture_output=True, timeout=3,
+		)
+		time.sleep(1)
+	except Exception:
+		pass
+
+
+def _wait_for_cdp(port: int, max_wait: int = 10):
+	"""等待 CDP 端口可用"""
+	import urllib.request
+	deadline = time.time() + max_wait
+	while time.time() < deadline:
+		try:
+			urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2)
+			return True
+		except Exception:
+			time.sleep(1)
+	return False
+
+
 def login_via_browser(*, timeout: int = 120) -> dict:
 	"""
 	直接启动系统 Chrome 进程（非 Playwright 控制），
@@ -58,6 +83,9 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 	"""
 	chrome_path = _find_chrome()
 	profile_dir = _get_profile_dir()
+
+	# 清理可能残留的旧进程
+	_kill_old_debug_chrome(_DEBUG_PORT)
 
 	# 启动 Chrome 进程，打开登录页
 	proc = subprocess.Popen(
@@ -71,13 +99,15 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 			LOGIN_URL,
 		],
 		stdout=subprocess.DEVNULL,
-		stderr=subprocess.DEVNULL,
+		stderr=subprocess.PIPE,
 	)
 
 	print(f"已启动 Chrome，请在浏览器中扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
 
-	# 等一下让 Chrome 启动完成
-	time.sleep(3)
+	# 等待 CDP 端口就绪
+	if not _wait_for_cdp(_DEBUG_PORT):
+		proc.terminate()
+		raise RuntimeError("Chrome 启动失败，CDP 端口未就绪")
 
 	try:
 		with sync_playwright() as p:
@@ -131,12 +161,14 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 def refresh_stoken(cookies: dict, user_agent: str) -> str:
 	"""用临时 Chrome 进程刷新 stoken"""
 	chrome_path = _find_chrome()
+	port = _DEBUG_PORT + 1
+	_kill_old_debug_chrome(port)
 
 	with tempfile.TemporaryDirectory() as tmpdir:
 		proc = subprocess.Popen(
 			[
 				chrome_path,
-				f"--remote-debugging-port={_DEBUG_PORT + 1}",
+				f"--remote-debugging-port={port}",
 				f"--user-data-dir={tmpdir}",
 				"--remote-allow-origins=*",
 				"--headless=new",
@@ -144,14 +176,16 @@ def refresh_stoken(cookies: dict, user_agent: str) -> str:
 				HOME_URL,
 			],
 			stdout=subprocess.DEVNULL,
-			stderr=subprocess.DEVNULL,
+			stderr=subprocess.PIPE,
 		)
 
-		time.sleep(3)
+		if not _wait_for_cdp(port):
+			proc.terminate()
+			raise RuntimeError("Chrome headless 启动失败")
 
 		try:
 			with sync_playwright() as p:
-				browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{_DEBUG_PORT + 1}")
+				browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
 				context = browser.contexts[0]
 
 				# 注入 cookies
