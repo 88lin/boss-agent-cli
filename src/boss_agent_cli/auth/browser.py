@@ -1,7 +1,9 @@
 import sys
 
 from playwright.sync_api import sync_playwright
-from playwright_stealth import stealth_sync
+from playwright_stealth import Stealth
+
+_stealth = Stealth()
 
 LOGIN_URL = "https://login.zhipin.com/?ka=header-login"
 HOME_URL = "https://www.zhipin.com/"
@@ -12,7 +14,7 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 		browser = p.chromium.launch(headless=False)
 		context = browser.new_context()
 		page = context.new_page()
-		stealth_sync(page)
+		_stealth.apply_stealth_sync(page)
 
 		page.goto(LOGIN_URL)
 		print(f"请在浏览器中扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
@@ -45,7 +47,7 @@ def refresh_stoken(cookies: dict, user_agent: str) -> str:
 				"path": "/",
 			}])
 		page = context.new_page()
-		stealth_sync(page)
+		_stealth.apply_stealth_sync(page)
 
 		page.goto(HOME_URL)
 		page.wait_for_load_state("networkidle")
