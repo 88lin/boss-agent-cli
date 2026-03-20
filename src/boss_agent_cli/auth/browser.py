@@ -63,16 +63,19 @@ def _kill_old_debug_chrome(port: int):
 		pass
 
 
-def _wait_for_cdp(port: int, max_wait: int = 10):
-	"""等待 CDP 端口可用"""
+def _wait_for_cdp(port: int, max_wait: int = 10) -> str | None:
+	"""等待 CDP 端口可用，返回 WebSocket URL"""
+	import json as json_mod
 	import urllib.request
 	deadline = time.time() + max_wait
 	while time.time() < deadline:
 		try:
-			urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2)
-			return True
+			resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2)
+			data = json_mod.loads(resp.read())
+			return data.get("webSocketDebuggerUrl", "")
 		except Exception:
 			time.sleep(1)
+	return None
 	return False
 
 
@@ -105,14 +108,15 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 	print(f"已启动 Chrome，请在浏览器中扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
 
 	# 等待 CDP 端口就绪
-	if not _wait_for_cdp(_DEBUG_PORT):
+	ws_url = _wait_for_cdp(_DEBUG_PORT)
+	if not ws_url:
 		proc.terminate()
 		raise RuntimeError("Chrome 启动失败，CDP 端口未就绪")
 
 	try:
 		with sync_playwright() as p:
-			# 连接到已运行的 Chrome（只读，不注入自动化标记）
-			browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{_DEBUG_PORT}")
+			# 通过 WebSocket 连接到已运行的 Chrome
+			browser = p.chromium.connect_over_cdp(ws_url)
 			context = browser.contexts[0]
 
 			# 轮询检测 wt2 cookie 出现
@@ -179,13 +183,14 @@ def refresh_stoken(cookies: dict, user_agent: str) -> str:
 			stderr=subprocess.PIPE,
 		)
 
-		if not _wait_for_cdp(port):
+		ws_url = _wait_for_cdp(port)
+		if not ws_url:
 			proc.terminate()
 			raise RuntimeError("Chrome headless 启动失败")
 
 		try:
 			with sync_playwright() as p:
-				browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+				browser = p.chromium.connect_over_cdp(ws_url)
 				context = browser.contexts[0]
 
 				# 注入 cookies
