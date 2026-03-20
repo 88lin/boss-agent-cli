@@ -1,97 +1,124 @@
+import platform
+import shutil
+import signal
+import subprocess
 import sys
-import time
 import tempfile
+import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
-from playwright_stealth import Stealth
-
-_stealth = Stealth()
 
 LOGIN_URL = "https://login.zhipin.com/?ka=header-login"
 HOME_URL = "https://www.zhipin.com/"
-
-# 浏览器 channel 优先级：系统 Chrome > Edge > Playwright Chromium
-_CHANNELS = ["chrome", "msedge", None]
+_DEBUG_PORT = 9223
 
 
-def _get_user_data_dir() -> Path:
-	d = Path.home() / ".boss-agent" / "browser-profile"
+def _find_chrome() -> str:
+	"""查找系统 Chrome 可执行文件路径"""
+	system = platform.system()
+	if system == "Darwin":
+		candidates = [
+			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+			"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		]
+	elif system == "Linux":
+		candidates = [
+			"google-chrome", "google-chrome-stable",
+			"chromium", "chromium-browser",
+		]
+	elif system == "Windows":
+		candidates = [
+			r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+			r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+		]
+	else:
+		candidates = []
+
+	for c in candidates:
+		if Path(c).exists() or shutil.which(c):
+			return c
+
+	raise RuntimeError(
+		"未找到系统 Chrome 浏览器。\n"
+		"请安装 Google Chrome: https://www.google.com/chrome/"
+	)
+
+
+def _get_profile_dir() -> Path:
+	d = Path.home() / ".boss-agent" / "chrome-profile"
 	d.mkdir(parents=True, exist_ok=True)
 	return d
 
 
-def _launch_persistent(playwright, *, headless: bool = False, user_data_dir: Path | None = None):
-	"""使用 persistent context 启动浏览器（真实 profile，最难被检测）"""
-	if user_data_dir is None:
-		user_data_dir = _get_user_data_dir()
-
-	args = [
-		"--disable-blink-features=AutomationControlled",
-		"--no-first-run",
-		"--no-default-browser-check",
-	]
-
-	for channel in _CHANNELS:
-		try:
-			kwargs = {
-				"headless": headless,
-				"args": args,
-				"viewport": {"width": 1280, "height": 800},
-				"locale": "zh-CN",
-				"timezone_id": "Asia/Shanghai",
-			}
-			if channel:
-				kwargs["channel"] = channel
-			context = playwright.chromium.launch_persistent_context(
-				str(user_data_dir),
-				**kwargs,
-			)
-			label = channel or "chromium"
-			print(f"使用浏览器: {label}", file=sys.stderr)
-			return context
-		except Exception:
-			continue
-
-	raise RuntimeError("未找到可用的浏览器，请安装 Chrome 或运行 playwright install chromium")
-
-
 def login_via_browser(*, timeout: int = 120) -> dict:
-	with sync_playwright() as p:
-		context = _launch_persistent(p, headless=False)
-		page = context.pages[0] if context.pages else context.new_page()
-		_stealth.apply_stealth_sync(page)
+	"""
+	直接启动系统 Chrome 进程（非 Playwright 控制），
+	Playwright 仅通过 CDP 连接读取数据，不注入自动化标记。
+	"""
+	chrome_path = _find_chrome()
+	profile_dir = _get_profile_dir()
 
-		page.goto(LOGIN_URL, wait_until="domcontentloaded")
-		page.wait_for_load_state("networkidle")
-		print(f"请在浏览器中扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
+	# 启动 Chrome 进程，打开登录页
+	proc = subprocess.Popen(
+		[
+			chrome_path,
+			f"--remote-debugging-port={_DEBUG_PORT}",
+			f"--user-data-dir={profile_dir}",
+			"--no-first-run",
+			"--no-default-browser-check",
+			LOGIN_URL,
+		],
+		stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL,
+	)
 
-		# 轮询 context.cookies() 检测 wt2 出现
-		deadline = time.time() + timeout
-		logged_in = False
-		while time.time() < deadline:
+	print(f"已启动 Chrome，请在浏览器中扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
+
+	# 等一下让 Chrome 启动完成
+	time.sleep(3)
+
+	try:
+		with sync_playwright() as p:
+			# 连接到已运行的 Chrome（只读，不注入自动化标记）
+			browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{_DEBUG_PORT}")
+			context = browser.contexts[0]
+
+			# 轮询检测 wt2 cookie 出现
+			deadline = time.time() + timeout
+			logged_in = False
+			while time.time() < deadline:
+				cookies_list = context.cookies()
+				if any(c["name"] == "wt2" for c in cookies_list):
+					logged_in = True
+					break
+				time.sleep(1)
+
+			if not logged_in:
+				raise TimeoutError(f"扫码登录超时（{timeout}秒）")
+
+			time.sleep(2)
+
 			cookies_list = context.cookies()
-			if any(c["name"] == "wt2" for c in cookies_list):
-				logged_in = True
-				break
-			time.sleep(1)
+			cookies = {c["name"]: c["value"] for c in cookies_list}
 
-		if not logged_in:
-			context.close()
-			raise TimeoutError(f"扫码登录超时（{timeout}秒）")
+			# 获取 user_agent
+			page = context.pages[0] if context.pages else context.new_page()
+			user_agent = page.evaluate("navigator.userAgent")
 
-		page.wait_for_timeout(2000)
+			# 跳转主站提取 stoken
+			page.goto(HOME_URL, wait_until="domcontentloaded")
+			page.wait_for_load_state("networkidle")
+			stoken = _extract_stoken(page)
 
-		cookies_list = context.cookies()
-		cookies = {c["name"]: c["value"] for c in cookies_list}
-		user_agent = page.evaluate("navigator.userAgent")
-
-		# 登录成功后访问主站提取 stoken
-		page.goto(HOME_URL, wait_until="domcontentloaded")
-		page.wait_for_load_state("networkidle")
-		stoken = _extract_stoken(page)
-
-		context.close()
+			browser.close()
+	finally:
+		# 关闭 Chrome 进程
+		try:
+			proc.terminate()
+			proc.wait(timeout=5)
+		except Exception:
+			proc.kill()
 
 	return {
 		"cookies": cookies,
@@ -101,27 +128,48 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 
 
 def refresh_stoken(cookies: dict, user_agent: str) -> str:
-	with sync_playwright() as p:
-		# stoken 刷新用临时 profile，注入已有 cookies
-		with tempfile.TemporaryDirectory() as tmpdir:
-			context = _launch_persistent(
-				p,
-				headless=True,
-				user_data_dir=Path(tmpdir) / "profile",
-			)
-			# 注入 cookies
-			context.add_cookies([
-				{"name": name, "value": value, "domain": ".zhipin.com", "path": "/"}
-				for name, value in cookies.items()
-			])
-			page = context.pages[0] if context.pages else context.new_page()
-			_stealth.apply_stealth_sync(page)
+	"""用临时 Chrome 进程刷新 stoken"""
+	chrome_path = _find_chrome()
 
-			page.goto(HOME_URL)
-			page.wait_for_load_state("networkidle")
-			stoken = _extract_stoken(page)
+	with tempfile.TemporaryDirectory() as tmpdir:
+		proc = subprocess.Popen(
+			[
+				chrome_path,
+				f"--remote-debugging-port={_DEBUG_PORT + 1}",
+				f"--user-data-dir={tmpdir}",
+				"--headless=new",
+				"--no-first-run",
+				HOME_URL,
+			],
+			stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL,
+		)
 
-			context.close()
+		time.sleep(3)
+
+		try:
+			with sync_playwright() as p:
+				browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{_DEBUG_PORT + 1}")
+				context = browser.contexts[0]
+
+				# 注入 cookies
+				context.add_cookies([
+					{"name": name, "value": value, "domain": ".zhipin.com", "path": "/"}
+					for name, value in cookies.items()
+				])
+
+				page = context.pages[0] if context.pages else context.new_page()
+				page.goto(HOME_URL)
+				page.wait_for_load_state("networkidle")
+				stoken = _extract_stoken(page)
+
+				browser.close()
+		finally:
+			try:
+				proc.terminate()
+				proc.wait(timeout=5)
+			except Exception:
+				proc.kill()
 
 	return stoken
 
