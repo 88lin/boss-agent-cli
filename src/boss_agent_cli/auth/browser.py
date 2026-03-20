@@ -34,18 +34,26 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 		page = context.new_page()
 		_stealth.apply_stealth_sync(page)
 
-		# 先访问主站建立 cookie，再跳转登录页
-		page.goto(HOME_URL, wait_until="domcontentloaded")
-		page.wait_for_timeout(1000)
+		# 直接访问登录页
 		page.goto(LOGIN_URL, wait_until="domcontentloaded")
 		page.wait_for_load_state("networkidle")
 		print(f"请在浏览器中扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
 
-		page.wait_for_url(f"{HOME_URL}**", timeout=timeout * 1000)
+		# 等待登录成功：检测 cookie 中出现 wt2（核心身份凭证）
+		page.wait_for_function(
+			"() => document.cookie.includes('wt2=')",
+			timeout=timeout * 1000,
+		)
+		# 登录成功后等待页面跳转完成
+		page.wait_for_timeout(2000)
 
 		cookies_list = context.cookies()
 		cookies = {c["name"]: c["value"] for c in cookies_list}
 		user_agent = page.evaluate("navigator.userAgent")
+
+		# 登录成功后访问主站提取 stoken
+		page.goto(HOME_URL, wait_until="domcontentloaded")
+		page.wait_for_load_state("networkidle")
 		stoken = _extract_stoken(page)
 
 		browser.close()
