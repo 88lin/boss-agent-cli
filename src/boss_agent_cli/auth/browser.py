@@ -1,5 +1,7 @@
 import sys
 import time
+import tempfile
+from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 from playwright_stealth import Stealth
@@ -9,50 +11,55 @@ _stealth = Stealth()
 LOGIN_URL = "https://login.zhipin.com/?ka=header-login"
 HOME_URL = "https://www.zhipin.com/"
 
-# 尝试使用系统 Chrome，失败则回退到 Playwright Chromium
-_LAUNCH_OPTIONS = [
-	{"channel": "chrome"},   # 系统 Chrome（最难被检测）
-	{"channel": "msedge"},   # 系统 Edge
-	{},                      # Playwright 自带 Chromium（兜底）
-]
+# 浏览器 channel 优先级：系统 Chrome > Edge > Playwright Chromium
+_CHANNELS = ["chrome", "msedge", None]
 
 
-def _launch_browser(playwright, *, headless: bool = False):
-	for opts in _LAUNCH_OPTIONS:
+def _get_user_data_dir() -> Path:
+	d = Path.home() / ".boss-agent" / "browser-profile"
+	d.mkdir(parents=True, exist_ok=True)
+	return d
+
+
+def _launch_persistent(playwright, *, headless: bool = False, user_data_dir: Path | None = None):
+	"""使用 persistent context 启动浏览器（真实 profile，最难被检测）"""
+	if user_data_dir is None:
+		user_data_dir = _get_user_data_dir()
+
+	args = [
+		"--disable-blink-features=AutomationControlled",
+		"--no-first-run",
+		"--no-default-browser-check",
+	]
+
+	for channel in _CHANNELS:
 		try:
-			browser = playwright.chromium.launch(
-				headless=headless,
-				args=[
-					"--disable-blink-features=AutomationControlled",
-					"--no-first-run",
-					"--no-default-browser-check",
-				],
-				**opts,
+			kwargs = {
+				"headless": headless,
+				"args": args,
+				"viewport": {"width": 1280, "height": 800},
+				"locale": "zh-CN",
+				"timezone_id": "Asia/Shanghai",
+			}
+			if channel:
+				kwargs["channel"] = channel
+			context = playwright.chromium.launch_persistent_context(
+				str(user_data_dir),
+				**kwargs,
 			)
-			channel = opts.get("channel", "chromium")
-			print(f"使用浏览器: {channel}", file=sys.stderr)
-			return browser
+			label = channel or "chromium"
+			print(f"使用浏览器: {label}", file=sys.stderr)
+			return context
 		except Exception:
 			continue
+
 	raise RuntimeError("未找到可用的浏览器，请安装 Chrome 或运行 playwright install chromium")
-
-
-def _make_context(browser, *, user_agent: str | None = None):
-	params = {
-		"viewport": {"width": 1280, "height": 800},
-		"locale": "zh-CN",
-		"timezone_id": "Asia/Shanghai",
-	}
-	if user_agent:
-		params["user_agent"] = user_agent
-	return browser.new_context(**params)
 
 
 def login_via_browser(*, timeout: int = 120) -> dict:
 	with sync_playwright() as p:
-		browser = _launch_browser(p, headless=False)
-		context = _make_context(browser)
-		page = context.new_page()
+		context = _launch_persistent(p, headless=False)
+		page = context.pages[0] if context.pages else context.new_page()
 		_stealth.apply_stealth_sync(page)
 
 		page.goto(LOGIN_URL, wait_until="domcontentloaded")
@@ -70,7 +77,7 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 			time.sleep(1)
 
 		if not logged_in:
-			browser.close()
+			context.close()
 			raise TimeoutError(f"扫码登录超时（{timeout}秒）")
 
 		page.wait_for_timeout(2000)
@@ -84,7 +91,7 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 		page.wait_for_load_state("networkidle")
 		stoken = _extract_stoken(page)
 
-		browser.close()
+		context.close()
 
 	return {
 		"cookies": cookies,
@@ -95,23 +102,26 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 
 def refresh_stoken(cookies: dict, user_agent: str) -> str:
 	with sync_playwright() as p:
-		browser = _launch_browser(p, headless=True)
-		context = _make_context(browser, user_agent=user_agent)
-		for name, value in cookies.items():
-			context.add_cookies([{
-				"name": name,
-				"value": value,
-				"domain": ".zhipin.com",
-				"path": "/",
-			}])
-		page = context.new_page()
-		_stealth.apply_stealth_sync(page)
+		# stoken 刷新用临时 profile，注入已有 cookies
+		with tempfile.TemporaryDirectory() as tmpdir:
+			context = _launch_persistent(
+				p,
+				headless=True,
+				user_data_dir=Path(tmpdir) / "profile",
+			)
+			# 注入 cookies
+			context.add_cookies([
+				{"name": name, "value": value, "domain": ".zhipin.com", "path": "/"}
+				for name, value in cookies.items()
+			])
+			page = context.pages[0] if context.pages else context.new_page()
+			_stealth.apply_stealth_sync(page)
 
-		page.goto(HOME_URL)
-		page.wait_for_load_state("networkidle")
-		stoken = _extract_stoken(page)
+			page.goto(HOME_URL)
+			page.wait_for_load_state("networkidle")
+			stoken = _extract_stoken(page)
 
-		browser.close()
+			context.close()
 
 	return stoken
 
