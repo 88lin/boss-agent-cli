@@ -6,22 +6,34 @@ from playwright.sync_api import sync_playwright
 LOGIN_PAGE_URL = "https://www.zhipin.com/web/user/"
 HOME_URL = "https://www.zhipin.com/"
 
-# 登录成功的 API 响应 URL 前缀（任意一个匹配即表示登录成功）
+# 登录成功的 API 响应 URL 前缀
 _LOGIN_SUCCESS_URLS = [
 	"https://www.zhipin.com/wapi/zppassport/qrcode/loginConfirm",
 	"https://www.zhipin.com/wapi/zppassport/qrcode/dispatcher",
 	"https://www.zhipin.com/wapi/zppassport/login/phoneV2",
 ]
 
+# CDP 注入脚本：在页面 JS 运行之前执行，修补所有自动化检测点
+_STEALTH_SCRIPT = """
+// 隐藏 navigator.webdriver
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+// 伪造 chrome 对象
+window.chrome = {runtime: {}, loadTimes: () => ({}), csi: () => ({})};
+// 伪造 plugins
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+// 伪造 languages
+Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh', 'en']});
+// 阻止 window.close
+window.close = () => {};
+// 拦截 about:blank 重定向
+const _origAssign = window.location.assign?.bind(window.location);
+const _origReplace = window.location.replace?.bind(window.location);
+if (_origAssign) window.location.assign = (url) => { if (url === 'about:blank') return; _origAssign(url); };
+if (_origReplace) window.location.replace = (url) => { if (url === 'about:blank') return; _origReplace(url); };
+"""
+
 
 def login_via_browser(*, timeout: int = 120) -> dict:
-	"""
-	参考 geekgeekrun 的实现：
-	1. 拦截所有非 zhipin.com 的导航（阻止 about:blank 重定向）
-	2. 打开 zhipin.com/web/user/ 登录页
-	3. 监听登录 API 响应判断登录成功
-	4. 登录后跳转主站提取 cookies 和 stoken
-	"""
 	with sync_playwright() as p:
 		browser = p.chromium.launch(headless=False)
 		context = browser.new_context(
@@ -31,7 +43,11 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 		)
 		page = context.new_page()
 
-		# 核心防护：拦截所有非 zhipin.com 的导航请求（包括 about:blank）
+		# 通过 CDP 在页面 JS 之前注入反检测脚本（比 add_init_script 更早）
+		cdp = context.new_cdp_session(page)
+		cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": _STEALTH_SCRIPT})
+
+		# 路由层拦截非 zhipin.com 导航
 		def _handle_route(route):
 			url = route.request.url
 			if route.request.is_navigation_request() and not url.startswith("https://www.zhipin.com"):
@@ -41,8 +57,15 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 
 		context.route("**/*", _handle_route)
 
-		# 额外防护：JS 层面阻止 window.close
-		page.add_init_script("window.close = () => {}")
+		# 监控页面导航，如果到了 about:blank 立即跳回登录页
+		def _on_navigated(frame):
+			if frame == page.main_frame and frame.url == "about:blank":
+				try:
+					page.goto(LOGIN_PAGE_URL, wait_until="domcontentloaded")
+				except Exception:
+					pass
+
+		page.on("framenavigated", _on_navigated)
 
 		page.goto(LOGIN_PAGE_URL, wait_until="domcontentloaded")
 		print("已打开 BOSS 直聘登录页。", file=sys.stderr)
@@ -91,7 +114,6 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 
 
 def refresh_stoken(cookies: dict, user_agent: str) -> str:
-	"""用 headless Chromium 刷新 stoken"""
 	with sync_playwright() as p:
 		browser = p.chromium.launch(headless=True)
 		context = browser.new_context(user_agent=user_agent)
