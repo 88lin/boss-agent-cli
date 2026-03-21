@@ -1,17 +1,26 @@
 import sys
-import tempfile
 import time
-from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+LOGIN_PAGE_URL = "https://www.zhipin.com/web/user/"
 HOME_URL = "https://www.zhipin.com/"
+
+# 登录成功的 API 响应 URL 前缀（任意一个匹配即表示登录成功）
+_LOGIN_SUCCESS_URLS = [
+	"https://www.zhipin.com/wapi/zppassport/qrcode/loginConfirm",
+	"https://www.zhipin.com/wapi/zppassport/qrcode/dispatcher",
+	"https://www.zhipin.com/wapi/zppassport/login/phoneV2",
+]
 
 
 def login_via_browser(*, timeout: int = 120) -> dict:
 	"""
-	用 Playwright 自带的 Chromium 打开 BOSS 直聘主站，
-	用户手动点击登录并扫码，程序检测到 wt2 cookie 后提取数据。
+	参考 geekgeekrun 的实现：
+	1. 拦截所有非 zhipin.com 的导航（阻止 about:blank 重定向）
+	2. 打开 zhipin.com/web/user/ 登录页
+	3. 监听登录 API 响应判断登录成功
+	4. 登录后跳转主站提取 cookies 和 stoken
 	"""
 	with sync_playwright() as p:
 		browser = p.chromium.launch(headless=False)
@@ -22,48 +31,54 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 		)
 		page = context.new_page()
 
-		# 拦截 BOSS 直聘的反自动化：阻止 window.close() 和跳转 about:blank
-		page.add_init_script("""
-			window.close = () => {};
-			Object.defineProperty(window, 'location', {
-				configurable: false,
-				get() { return document.location; },
-				set(url) {
-					if (url === 'about:blank' || url === '') return;
-					document.location = url;
-				}
-			});
-		""")
-		# 路由层面也拦截 about:blank
-		context.route("about:blank", lambda route: route.abort())
+		# 核心防护：拦截所有非 zhipin.com 的导航请求（包括 about:blank）
+		def _handle_route(route):
+			url = route.request.url
+			if route.request.is_navigation_request() and not url.startswith("https://www.zhipin.com"):
+				route.abort()
+			else:
+				route.fallback()
 
-		page.goto(HOME_URL, wait_until="domcontentloaded")
-		print("已打开 BOSS 直聘主站。", file=sys.stderr)
-		print(f"请点击右上角「登录」按钮，扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
+		context.route("**/*", _handle_route)
 
-		# 轮询 context.cookies() 检测 wt2 cookie
-		deadline = time.time() + timeout
-		logged_in = False
-		while time.time() < deadline:
-			try:
-				cookies_list = context.cookies()
-				if any(c["name"] == "wt2" for c in cookies_list):
-					logged_in = True
+		# 额外防护：JS 层面阻止 window.close
+		page.add_init_script("window.close = () => {}")
+
+		page.goto(LOGIN_PAGE_URL, wait_until="domcontentloaded")
+		print("已打开 BOSS 直聘登录页。", file=sys.stderr)
+		print(f"请扫码或手机号登录（超时 {timeout} 秒）...", file=sys.stderr)
+
+		# 监听登录成功的 API 响应
+		login_detected = False
+
+		def _on_response(response):
+			nonlocal login_detected
+			for prefix in _LOGIN_SUCCESS_URLS:
+				if response.url.startswith(prefix):
+					login_detected = True
 					break
-			except Exception:
-				break
-			time.sleep(1)
 
-		if not logged_in:
+		page.on("response", _on_response)
+
+		# 等待登录成功
+		deadline = time.time() + timeout
+		while time.time() < deadline and not login_detected:
+			time.sleep(0.5)
+
+		if not login_detected:
 			browser.close()
 			raise TimeoutError(f"扫码登录超时（{timeout}秒）")
 
-		time.sleep(2)
+		print("检测到登录成功，正在提取凭证...", file=sys.stderr)
+		time.sleep(3)
+
+		# 跳转主站提取 cookies 和 stoken
+		page.goto(HOME_URL, wait_until="domcontentloaded")
+		page.wait_for_load_state("networkidle")
+
 		cookies_list = context.cookies()
 		cookies = {c["name"]: c["value"] for c in cookies_list}
 		user_agent = page.evaluate("navigator.userAgent")
-
-		# 提取 stoken
 		stoken = _extract_stoken(page)
 
 		browser.close()
