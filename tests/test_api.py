@@ -25,8 +25,14 @@ def test_job_item_from_api():
 		"brandName": "字节跳动",
 		"salaryDesc": "25-50K·15薪",
 		"cityName": "北京",
+		"areaDistrict": "海淀区",
 		"jobExperience": "3-5年",
 		"jobDegree": "本科",
+		"skills": ["Golang", "Gin"],
+		"welfareList": ["五险一金", "双休"],
+		"brandIndustry": "互联网",
+		"brandScaleName": "10000人以上",
+		"brandStageName": "已上市",
 		"bossName": "张先生",
 		"bossTitle": "技术总监",
 		"bossOnline": True,
@@ -37,6 +43,11 @@ def test_job_item_from_api():
 	assert job.title == "Golang 工程师"
 	assert job.company == "字节跳动"
 	assert job.security_id == "sec_xxx"
+	assert job.district == "海淀区"
+	assert job.skills == ["Golang", "Gin"]
+	assert "双休" in job.welfare
+	assert job.industry == "互联网"
+	assert job.scale == "10000人以上"
 
 
 def test_job_item_to_dict():
@@ -46,8 +57,14 @@ def test_job_item_to_dict():
 		"brandName": "字节跳动",
 		"salaryDesc": "25-50K",
 		"cityName": "北京",
+		"areaDistrict": "朝阳区",
 		"jobExperience": "3-5年",
 		"jobDegree": "本科",
+		"skills": ["Golang"],
+		"welfareList": ["五险一金"],
+		"brandIndustry": "互联网",
+		"brandScaleName": "10000人以上",
+		"brandStageName": "已上市",
 		"bossName": "张先生",
 		"bossTitle": "CTO",
 		"bossOnline": False,
@@ -58,3 +75,5 @@ def test_job_item_to_dict():
 	assert d["job_id"] == "abc123"
 	assert d["boss_active"] == "离线"
 	assert d["greeted"] is False
+	assert d["welfare"] == ["五险一金"]
+	assert d["skills"] == ["Golang"]

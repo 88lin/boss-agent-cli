@@ -8,8 +8,14 @@ class JobItem:
 	company: str
 	salary: str
 	city: str
+	district: str
 	experience: str
 	education: str
+	skills: list[str]
+	welfare: list[str]
+	industry: str
+	scale: str
+	stage: str
 	boss_name: str
 	boss_title: str
 	boss_active: str
@@ -24,8 +30,14 @@ class JobItem:
 			company=raw.get("brandName", ""),
 			salary=raw.get("salaryDesc", ""),
 			city=raw.get("cityName", ""),
+			district=raw.get("areaDistrict", ""),
 			experience=raw.get("jobExperience", ""),
 			education=raw.get("jobDegree", ""),
+			skills=raw.get("skills", []),
+			welfare=raw.get("welfareList", []),
+			industry=raw.get("brandIndustry", ""),
+			scale=raw.get("brandScaleName", ""),
+			stage=raw.get("brandStageName", ""),
 			boss_name=raw.get("bossName", ""),
 			boss_title=raw.get("bossTitle", ""),
 			boss_active="在线" if raw.get("bossOnline") else "离线",
@@ -39,8 +51,14 @@ class JobItem:
 			"company": self.company,
 			"salary": self.salary,
 			"city": self.city,
+			"district": self.district,
 			"experience": self.experience,
 			"education": self.education,
+			"skills": self.skills,
+			"welfare": self.welfare,
+			"industry": self.industry,
+			"scale": self.scale,
+			"stage": self.stage,
 			"boss_name": self.boss_name,
 			"boss_title": self.boss_title,
 			"boss_active": self.boss_active,
