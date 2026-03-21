@@ -4,7 +4,7 @@ SEARCH_URL = f"{BASE_URL}/wapi/zpgeek/search/joblist.json"
 RECOMMEND_URL = f"{BASE_URL}/wapi/zpgeek/pc/recommend/job/list.json"
 DETAIL_URL = f"{BASE_URL}/wapi/zpgeek/job/detail.json"
 GREET_URL = f"{BASE_URL}/wapi/zpgeek/friend/add.json"
-USER_INFO_URL = f"{BASE_URL}/wapi/zpgeek/common/user/info.json"
+USER_INFO_URL = f"{BASE_URL}/wapi/zpuser/wap/getUserInfo.json"
 
 CITY_CODES = {
 	"北京": "101010100", "上海": "101020100", "广州": "101280100",
