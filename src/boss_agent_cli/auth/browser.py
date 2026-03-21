@@ -6,18 +6,11 @@ from patchright.sync_api import sync_playwright
 LOGIN_PAGE_URL = "https://www.zhipin.com/web/user/"
 HOME_URL = "https://www.zhipin.com/"
 
-# 登录成功的 API 响应 URL 前缀
-_LOGIN_SUCCESS_URLS = [
-	"https://www.zhipin.com/wapi/zppassport/qrcode/loginConfirm",
-	"https://www.zhipin.com/wapi/zppassport/qrcode/dispatcher",
-	"https://www.zhipin.com/wapi/zppassport/login/phoneV2",
-]
-
 
 def login_via_browser(*, timeout: int = 120) -> dict:
 	"""
 	使用 patchright（Playwright 反检测 fork）打开登录页。
-	patchright 从浏览器二进制层面修补了自动化标记，BOSS 直聘无法检测。
+	双重检测登录成功：监听 API 响应 + 轮询 wt2 cookie。
 	"""
 	with sync_playwright() as p:
 		browser = p.chromium.launch(headless=False)
@@ -32,22 +25,30 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 		print("已打开 BOSS 直聘登录页。", file=sys.stderr)
 		print(f"请扫码或手机号登录（超时 {timeout} 秒）...", file=sys.stderr)
 
-		# 监听登录成功的 API 响应
+		# 双重检测：API 响应 或 wt2 cookie 出现，任一触发即认为登录成功
 		login_detected = False
 
 		def _on_response(response):
 			nonlocal login_detected
-			for prefix in _LOGIN_SUCCESS_URLS:
-				if response.url.startswith(prefix):
-					login_detected = True
-					break
+			url = response.url
+			if (url.startswith("https://www.zhipin.com/wapi/zppassport/qrcode/loginConfirm")
+				or url.startswith("https://www.zhipin.com/wapi/zppassport/qrcode/dispatcher")
+				or url.startswith("https://www.zhipin.com/wapi/zppassport/login/phoneV2")):
+				login_detected = True
 
 		page.on("response", _on_response)
 
-		# 等待登录成功
 		deadline = time.time() + timeout
 		while time.time() < deadline and not login_detected:
-			time.sleep(0.5)
+			# 也通过 cookie 检测（覆盖 API 匹配不上的情况）
+			try:
+				cookies_list = context.cookies()
+				if any(c["name"] == "wt2" for c in cookies_list):
+					login_detected = True
+					break
+			except Exception:
+				pass
+			time.sleep(1)
 
 		if not login_detected:
 			browser.close()
@@ -56,7 +57,7 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 		print("检测到登录成功，正在提取凭证...", file=sys.stderr)
 		time.sleep(3)
 
-		# 跳转主站提取 cookies 和 stoken
+		# 跳转主站提取完整 cookies 和 stoken
 		page.goto(HOME_URL, wait_until="domcontentloaded")
 		page.wait_for_load_state("networkidle")
 
