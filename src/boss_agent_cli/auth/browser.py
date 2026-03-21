@@ -1,6 +1,5 @@
 import platform
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -9,44 +8,47 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-LOGIN_URL = "https://login.zhipin.com/?ka=header-login"
 HOME_URL = "https://www.zhipin.com/"
 _DEBUG_PORT = 9223
 
 
-def _find_chrome() -> str:
-	"""查找系统 Chrome 可执行文件路径"""
+def _find_chromium_path() -> str:
+	"""查找 Playwright 安装的 Chromium 路径（独立于系统 Chrome，不会冲突）"""
 	system = platform.system()
-	if system == "Darwin":
-		candidates = [
-			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-			"/Applications/Chromium.app/Contents/MacOS/Chromium",
-		]
-	elif system == "Linux":
-		candidates = [
-			"google-chrome", "google-chrome-stable",
-			"chromium", "chromium-browser",
-		]
-	elif system == "Windows":
-		candidates = [
-			r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-			r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-		]
-	else:
-		candidates = []
+	base = None
 
-	for c in candidates:
-		if Path(c).exists() or shutil.which(c):
-			return c
+	if system == "Darwin":
+		base = Path.home() / "Library" / "Caches" / "ms-playwright"
+		# Playwright 在 macOS 上安装为 "Google Chrome for Testing.app" 或 "Chromium.app"
+		app_names = [
+			"Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+			"Chromium.app/Contents/MacOS/Chromium",
+		]
+		dir_patterns = ["chrome-mac-arm64", "chrome-mac"]
+	elif system == "Linux":
+		base = Path.home() / ".cache" / "ms-playwright"
+		app_names = ["chrome"]
+		dir_patterns = ["chrome-linux"]
+	else:
+		raise RuntimeError("当前平台暂不支持")
+
+	if base and base.exists():
+		for d in sorted(base.iterdir(), reverse=True):
+			if d.name.startswith("chromium"):
+				for sub in dir_patterns:
+					for app in app_names:
+						binary = d / sub / app
+						if binary.exists():
+							return str(binary)
 
 	raise RuntimeError(
-		"未找到系统 Chrome 浏览器。\n"
-		"请安装 Google Chrome: https://www.google.com/chrome/"
+		"未找到 Playwright Chromium。请运行:\n"
+		"  uv run playwright install chromium"
 	)
 
 
 def _kill_old_debug_chrome(port: int):
-	"""杀死可能占用调试端口的旧 Chrome 进程"""
+	"""杀死可能占用调试端口的旧进程"""
 	try:
 		subprocess.run(
 			["pkill", "-f", f"remote-debugging-port={port}"],
@@ -57,7 +59,7 @@ def _kill_old_debug_chrome(port: int):
 		pass
 
 
-def _wait_for_cdp(port: int, max_wait: int = 10) -> str | None:
+def _wait_for_cdp(port: int, max_wait: int = 15) -> str | None:
 	"""等待 CDP 端口可用，返回 WebSocket URL"""
 	import json as json_mod
 	import urllib.request
@@ -74,24 +76,23 @@ def _wait_for_cdp(port: int, max_wait: int = 10) -> str | None:
 
 def login_via_browser(*, timeout: int = 120) -> dict:
 	"""
-	直接启动系统 Chrome 进程（非 Playwright 控制），
-	Playwright 仅通过 CDP 连接读取数据，不注入自动化标记。
+	启动 Playwright 的 Chromium（独立于系统 Chrome，不会冲突），
+	通过 CDP 连接读取 cookie 数据。
 	"""
-	chrome_path = _find_chrome()
+	chromium_path = _find_chromium_path()
 
-	# 清理残留进程和损坏的旧 profile
 	_kill_old_debug_chrome(_DEBUG_PORT)
 
-	# 每次用全新临时 profile，避免锁文件/损坏导致闪退
-	profile_dir = tempfile.mkdtemp(prefix="boss-agent-chrome-")
+	profile_dir = tempfile.mkdtemp(prefix="boss-agent-login-")
 
-	# 启动 Chrome 进程，打开主站（非登录页，避免 login.zhipin.com 的检测）
+	# 启动 Chromium（不是系统 Chrome，不会和用户的 Chrome 冲突）
 	proc = subprocess.Popen(
 		[
-			chrome_path,
+			chromium_path,
 			f"--remote-debugging-port={_DEBUG_PORT}",
 			f"--user-data-dir={profile_dir}",
 			"--remote-allow-origins=*",
+			"--disable-blink-features=AutomationControlled",
 			"--no-first-run",
 			"--no-default-browser-check",
 			HOME_URL,
@@ -101,18 +102,16 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 		start_new_session=True,
 	)
 
-	print(f"已启动 Chrome 并打开 BOSS 直聘主站。", file=sys.stderr)
+	print("已启动浏览器并打开 BOSS 直聘主站。", file=sys.stderr)
 	print(f"请点击页面右上角「登录」按钮，然后扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
 
-	# 等待 CDP 端口就绪
 	ws_url = _wait_for_cdp(_DEBUG_PORT)
 	if not ws_url:
 		proc.terminate()
-		raise RuntimeError("Chrome 启动失败，CDP 端口未就绪")
+		raise RuntimeError("浏览器启动失败，CDP 端口未就绪")
 
 	try:
 		with sync_playwright() as p:
-			# 通过 WebSocket 连接到已运行的 Chrome
 			browser = p.chromium.connect_over_cdp(ws_url)
 			context = browser.contexts[0]
 
@@ -134,7 +133,6 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 			cookies_list = context.cookies()
 			cookies = {c["name"]: c["value"] for c in cookies_list}
 
-			# 获取 user_agent
 			page = context.pages[0] if context.pages else context.new_page()
 			user_agent = page.evaluate("navigator.userAgent")
 
@@ -145,7 +143,6 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 
 			browser.close()
 	finally:
-		# 关闭 Chrome 进程
 		try:
 			proc.terminate()
 			proc.wait(timeout=5)
@@ -160,18 +157,19 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 
 
 def refresh_stoken(cookies: dict, user_agent: str) -> str:
-	"""用临时 Chrome 进程刷新 stoken"""
-	chrome_path = _find_chrome()
+	"""用 headless Chromium 刷新 stoken"""
+	chromium_path = _find_chromium_path()
 	port = _DEBUG_PORT + 1
 	_kill_old_debug_chrome(port)
 
 	with tempfile.TemporaryDirectory() as tmpdir:
 		proc = subprocess.Popen(
 			[
-				chrome_path,
+				chromium_path,
 				f"--remote-debugging-port={port}",
 				f"--user-data-dir={tmpdir}",
 				"--remote-allow-origins=*",
+				"--disable-blink-features=AutomationControlled",
 				"--headless=new",
 				"--no-first-run",
 				HOME_URL,
@@ -184,14 +182,13 @@ def refresh_stoken(cookies: dict, user_agent: str) -> str:
 		ws_url = _wait_for_cdp(port)
 		if not ws_url:
 			proc.terminate()
-			raise RuntimeError("Chrome headless 启动失败")
+			raise RuntimeError("Chromium headless 启动失败")
 
 		try:
 			with sync_playwright() as p:
 				browser = p.chromium.connect_over_cdp(ws_url)
 				context = browser.contexts[0]
 
-				# 注入 cookies
 				context.add_cookies([
 					{"name": name, "value": value, "domain": ".zhipin.com", "path": "/"}
 					for name, value in cookies.items()
