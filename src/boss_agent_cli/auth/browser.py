@@ -22,6 +22,9 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 		)
 		page = context.new_page()
 
+		# 阻止 BOSS 直聘的反自动化脚本调用 window.close() 关闭标签页
+		page.add_init_script("window.close = () => {}")
+
 		page.goto(HOME_URL, wait_until="domcontentloaded")
 		print("已打开 BOSS 直聘主站。", file=sys.stderr)
 		print(f"请点击右上角「登录」按钮，扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
