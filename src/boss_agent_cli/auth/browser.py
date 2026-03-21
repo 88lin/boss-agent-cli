@@ -87,10 +87,10 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 	chrome_path = _find_chrome()
 	profile_dir = _get_profile_dir()
 
-	# 清理可能残留的旧进程
+	# 清理可能残留的旧进程和损坏的 profile
 	_kill_old_debug_chrome(_DEBUG_PORT)
 
-	# 启动 Chrome 进程，打开登录页
+	# 启动 Chrome 进程，打开主站（非登录页，避免 login.zhipin.com 的检测）
 	proc = subprocess.Popen(
 		[
 			chrome_path,
@@ -99,13 +99,14 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 			"--remote-allow-origins=*",
 			"--no-first-run",
 			"--no-default-browser-check",
-			LOGIN_URL,
+			HOME_URL,
 		],
 		stdout=subprocess.DEVNULL,
 		stderr=subprocess.PIPE,
 	)
 
-	print(f"已启动 Chrome，请在浏览器中扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
+	print(f"已启动 Chrome 并打开 BOSS 直聘主站。", file=sys.stderr)
+	print(f"请点击页面右上角「登录」按钮，然后扫码登录（超时 {timeout} 秒）...", file=sys.stderr)
 
 	# 等待 CDP 端口就绪
 	ws_url = _wait_for_cdp(_DEBUG_PORT)
