@@ -4,6 +4,7 @@ SEARCH_URL = f"{BASE_URL}/wapi/zpgeek/search/joblist.json"
 RECOMMEND_URL = f"{BASE_URL}/wapi/zpgeek/pc/recommend/job/list.json"
 DETAIL_URL = f"{BASE_URL}/wapi/zpgeek/job/detail.json"
 GREET_URL = f"{BASE_URL}/wapi/zpgeek/friend/add.json"
+JOB_CARD_URL = f"{BASE_URL}/wapi/zpgeek/job/card.json"
 USER_INFO_URL = f"{BASE_URL}/wapi/zpuser/wap/getUserInfo.json"
 
 CITY_CODES = {

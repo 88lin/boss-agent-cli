@@ -90,6 +90,11 @@ class BossClient:
 		params = {"encryptJobId": job_id}
 		return self._request("GET", endpoints.DETAIL_URL, params=params)
 
+	def job_card(self, security_id: str, lid: str = "") -> dict:
+		"""获取职位卡片详情（含职位描述 postDescription）"""
+		params = {"securityId": security_id, "lid": lid}
+		return self._request("GET", endpoints.JOB_CARD_URL, params=params)
+
 	def greet(self, security_id: str, job_id: str, message: str = "") -> dict:
 		data = {
 			"securityId": security_id,

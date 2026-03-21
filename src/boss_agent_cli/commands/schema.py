@@ -58,6 +58,12 @@ SCHEMA_DATA = {
 					"default": None,
 					"description": "公司规模（如 100-499人）",
 				},
+				"--welfare": {
+					"type": "string",
+					"default": None,
+					"description": "福利筛选关键词（如 双休、五险一金）。启用后会逐个检查职位详情，自动翻页直到找到匹配结果",
+					"examples": ["双休", "五险一金", "年终奖", "餐补", "住房补贴"],
+				},
 				"--page": {
 					"type": "int",
 					"default": 1,
