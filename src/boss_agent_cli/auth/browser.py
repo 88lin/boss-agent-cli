@@ -1,7 +1,7 @@
 import sys
 import time
 
-from playwright.sync_api import sync_playwright
+from patchright.sync_api import sync_playwright
 
 LOGIN_PAGE_URL = "https://www.zhipin.com/web/user/"
 HOME_URL = "https://www.zhipin.com/"
@@ -13,27 +13,12 @@ _LOGIN_SUCCESS_URLS = [
 	"https://www.zhipin.com/wapi/zppassport/login/phoneV2",
 ]
 
-# CDP 注入脚本：在页面 JS 运行之前执行，修补所有自动化检测点
-_STEALTH_SCRIPT = """
-// 隐藏 navigator.webdriver
-Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-// 伪造 chrome 对象
-window.chrome = {runtime: {}, loadTimes: () => ({}), csi: () => ({})};
-// 伪造 plugins
-Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-// 伪造 languages
-Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh', 'en']});
-// 阻止 window.close
-window.close = () => {};
-// 拦截 about:blank 重定向
-const _origAssign = window.location.assign?.bind(window.location);
-const _origReplace = window.location.replace?.bind(window.location);
-if (_origAssign) window.location.assign = (url) => { if (url === 'about:blank') return; _origAssign(url); };
-if (_origReplace) window.location.replace = (url) => { if (url === 'about:blank') return; _origReplace(url); };
-"""
-
 
 def login_via_browser(*, timeout: int = 120) -> dict:
+	"""
+	使用 patchright（Playwright 反检测 fork）打开登录页。
+	patchright 从浏览器二进制层面修补了自动化标记，BOSS 直聘无法检测。
+	"""
 	with sync_playwright() as p:
 		browser = p.chromium.launch(headless=False)
 		context = browser.new_context(
@@ -42,30 +27,6 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 			timezone_id="Asia/Shanghai",
 		)
 		page = context.new_page()
-
-		# 通过 CDP 在页面 JS 之前注入反检测脚本（比 add_init_script 更早）
-		cdp = context.new_cdp_session(page)
-		cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": _STEALTH_SCRIPT})
-
-		# 路由层拦截非 zhipin.com 导航
-		def _handle_route(route):
-			url = route.request.url
-			if route.request.is_navigation_request() and not url.startswith("https://www.zhipin.com"):
-				route.abort()
-			else:
-				route.fallback()
-
-		context.route("**/*", _handle_route)
-
-		# 监控页面导航，如果到了 about:blank 立即跳回登录页
-		def _on_navigated(frame):
-			if frame == page.main_frame and frame.url == "about:blank":
-				try:
-					page.goto(LOGIN_PAGE_URL, wait_until="domcontentloaded")
-				except Exception:
-					pass
-
-		page.on("framenavigated", _on_navigated)
 
 		page.goto(LOGIN_PAGE_URL, wait_until="domcontentloaded")
 		print("已打开 BOSS 直聘登录页。", file=sys.stderr)
