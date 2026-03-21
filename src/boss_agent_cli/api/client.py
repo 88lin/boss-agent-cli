@@ -34,7 +34,10 @@ class BossClient:
 		return self._client
 
 	def _wait(self):
-		time.sleep(random.uniform(*self._delay))
+		mean = sum(self._delay) / 2
+		std = (self._delay[1] - self._delay[0]) / 4
+		delay = max(self._delay[0], random.gauss(mean, std))
+		time.sleep(delay)
 
 	def _request(self, method: str, url: str, *, _retry_count: int = 0, **kwargs) -> dict:
 		client = self._get_client()
@@ -52,6 +55,8 @@ class BossClient:
 		if resp.status_code == 403 or "安全验证" in resp.text:
 			if _retry_count >= _MAX_RETRIES:
 				raise AuthError("Token 刷新后仍被拒绝，请重新登录")
+			backoff = 2 ** _retry_count + random.uniform(0, 1)
+			time.sleep(backoff)
 			self._auth.force_refresh()
 			self._client = None
 			return self._request(method, url, _retry_count=_retry_count + 1, **kwargs)
@@ -105,3 +110,15 @@ class BossClient:
 
 	def user_info(self) -> dict:
 		return self._request("GET", endpoints.USER_INFO_URL)
+
+	def recommend_jobs(self, page: int = 1) -> dict:
+		params = {"page": page}
+		return self._request("GET", endpoints.RECOMMEND_URL, params=params)
+
+	def applied_list(self, page: int = 1) -> dict:
+		params = {"page": page}
+		return self._request("GET", endpoints.APPLIED_URL, params=params)
+
+	def chat_list(self, page: int = 1) -> dict:
+		params = {"page": page}
+		return self._request("GET", endpoints.CHAT_LIST_URL, params=params)
