@@ -26,10 +26,36 @@ _WELFARE_KEYWORDS = {
 _MAX_FILTER_PAGES = 5  # 福利筛选时最多翻页数
 
 
-def _match_welfare(keywords: list[str], welfare_list: list[str], description: str) -> bool:
-	"""检查福利标签或职位描述中是否包含任一关键词"""
-	text = " ".join(welfare_list) + " " + description
+def _resolve_welfare_keywords(label: str) -> list[str]:
+	"""将单个福利标签解析为匹配关键词列表"""
+	return _WELFARE_KEYWORDS.get(label, [label])
+
+
+def _check_welfare_in_text(keywords: list[str], text: str) -> bool:
+	"""检查文本中是否包含任一关键词"""
 	return any(kw in text for kw in keywords)
+
+
+def _match_all_welfare(
+	conditions: list[tuple[str, list[str]]],
+	welfare_list: list[str],
+	description: str,
+) -> list[str]:
+	"""
+	检查所有福利条件是否都满足（AND 逻辑）。
+	返回每个条件的匹配结果列表，全部匹配返回非空列表，否则返回空列表。
+	"""
+	text = " ".join(welfare_list)
+	full_text = text + " " + description
+	results = []
+	for label, keywords in conditions:
+		if _check_welfare_in_text(keywords, text):
+			results.append(f"{label}(标签)")
+		elif description and _check_welfare_in_text(keywords, full_text):
+			results.append(f"{label}(描述)")
+		else:
+			return []  # 任一条件不满足，直接返回空
+	return results
 
 
 @click.command("search")
@@ -58,18 +84,16 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 		)
 		return
 
-	# 解析福利关键词
-	welfare_keywords = None
+	# 解析福利关键词（支持逗号分隔的多条件组合）
+	welfare_conditions = None
 	if welfare:
-		welfare_keywords = _WELFARE_KEYWORDS.get(welfare)
-		if welfare_keywords is None:
-			# 用户输入的不在预设映射中，直接作为关键词使用
-			welfare_keywords = [welfare]
+		labels = [w.strip() for w in welfare.split(",") if w.strip()]
+		welfare_conditions = [(label, _resolve_welfare_keywords(label)) for label in labels]
 
 	cache = CacheStore(data_dir / "cache" / "boss_agent.db")
 
 	# 有福利筛选时跳过缓存（因为需要逐个查详情）
-	if not welfare_keywords and not no_cache:
+	if not welfare_conditions and not no_cache:
 		search_params = {
 			"query": query, "city": city, "salary": salary,
 			"experience": experience, "education": education,
@@ -87,12 +111,11 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 		auth = AuthManager(data_dir, logger=logger)
 		client = BossClient(auth, delay=delay)
 
-		if welfare_keywords:
+		if welfare_conditions:
 			# 福利筛选模式：逐页搜索 + 逐个检查详情
 			items = _search_with_welfare_filter(
 				client, cache, logger, query,
-				welfare_keywords=welfare_keywords,
-				welfare_label=welfare,
+				welfare_conditions=welfare_conditions,
 				city=city, salary=salary, experience=experience,
 				education=education, industry=industry, scale=scale,
 				start_page=page,
@@ -167,18 +190,19 @@ def _search_with_welfare_filter(
 	logger,
 	query: str,
 	*,
-	welfare_keywords: list[str],
-	welfare_label: str,
+	welfare_conditions: list[tuple[str, list[str]]],
 	city=None, salary=None, experience=None,
 	education=None, industry=None, scale=None,
 	start_page: int = 1,
 ) -> list[dict]:
-	"""逐页搜索，对每个职位先检查福利标签，不匹配再查详情描述"""
+	"""逐页搜索，对每个职位检查所有福利条件是否同时满足（AND 逻辑）"""
 	matched = []
 	current_page = start_page
+	condition_labels = [c[0] for c in welfare_conditions]
+	label_str = "+".join(condition_labels)
 
 	for _ in range(_MAX_FILTER_PAGES):
-		logger.info(f"正在搜索第 {current_page} 页...")
+		logger.info(f"正在搜索第 {current_page} 页（筛选: {label_str}）...")
 		raw = client.search_jobs(
 			query, city=city, salary=salary, experience=experience,
 			education=education, industry=industry, scale=scale,
@@ -191,17 +215,21 @@ def _search_with_welfare_filter(
 
 		for raw_item in job_list:
 			welfare_list = raw_item.get("welfareList", [])
-			# 第一步：检查福利标签（无需额外请求）
-			if _match_welfare(welfare_keywords, welfare_list, ""):
+			company = raw_item.get("brandName", "")
+			title = raw_item.get("jobName", "")
+
+			# 第一步：仅用福利标签检查
+			match_results = _match_all_welfare(welfare_conditions, welfare_list, "")
+			if match_results:
 				item = JobItem.from_api(raw_item)
 				item.greeted = cache.is_greeted(item.security_id)
 				d = item.to_dict()
-				d["welfare_match"] = f"✅ {welfare_label}（福利标签）"
+				d["welfare_match"] = "✅ " + ", ".join(match_results)
 				matched.append(d)
-				logger.info(f"  ✅ {item.company} - {item.title}（标签匹配）")
+				logger.info(f"  ✅ {company} - {title}（标签匹配）")
 				continue
 
-			# 第二步：查职位卡片详情中的描述
+			# 第二步：标签不够，查详情描述补充判断
 			try:
 				card_raw = client.job_card(
 					raw_item.get("securityId", ""),
@@ -211,17 +239,16 @@ def _search_with_welfare_filter(
 			except Exception:
 				desc = ""
 
-			if _match_welfare(welfare_keywords, welfare_list, desc):
+			match_results = _match_all_welfare(welfare_conditions, welfare_list, desc)
+			if match_results:
 				item = JobItem.from_api(raw_item)
 				item.greeted = cache.is_greeted(item.security_id)
 				d = item.to_dict()
-				d["welfare_match"] = f"✅ {welfare_label}（描述提及）"
+				d["welfare_match"] = "✅ " + ", ".join(match_results)
 				matched.append(d)
-				logger.info(f"  ✅ {item.company} - {item.title}（描述匹配）")
+				logger.info(f"  ✅ {company} - {title}（详情匹配）")
 			else:
-				title = raw_item.get("jobName", "")
-				company = raw_item.get("brandName", "")
-				logger.info(f"  ❌ {company} - {title}（不匹配）")
+				logger.info(f"  ❌ {company} - {title}")
 
 		has_more = zp_data.get("hasMore", False)
 		if not has_more:
