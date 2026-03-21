@@ -77,11 +77,17 @@ SCHEMA_DATA = {
 			},
 		},
 		"detail": {
-			"description": "查看职位完整信息",
+			"description": "查看职位完整信息（职位描述、地址、招聘者信息）",
 			"args": [
-				{"name": "job_id", "required": True, "description": "加密职位 ID"},
+				{"name": "security_id", "required": True, "description": "安全 ID，从 search 结果中获取"},
 			],
-			"options": {},
+			"options": {
+				"--lid": {
+					"type": "string",
+					"default": "",
+					"description": "列表项 ID（可选，提高匹配精度）",
+				},
+			},
 		},
 		"greet": {
 			"description": "向指定招聘者打招呼",

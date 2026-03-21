@@ -1,17 +1,17 @@
 import click
 
 from boss_agent_cli.api.client import BossClient
-from boss_agent_cli.api.models import JobDetail
 from boss_agent_cli.auth.manager import AuthManager, AuthRequired, TokenRefreshFailed
 from boss_agent_cli.cache.store import CacheStore
 from boss_agent_cli.output import emit_error, emit_success
 
 
 @click.command("detail")
-@click.argument("job_id")
+@click.argument("security_id")
+@click.option("--lid", default="", help="列表项 ID（从 search 结果获取，可选）")
 @click.pass_context
-def detail_cmd(ctx, job_id):
-	"""查看职位完整信息"""
+def detail_cmd(ctx, security_id, lid):
+	"""查看职位完整信息（职位描述、地址、招聘者信息）"""
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 	delay = ctx.obj["delay"]
@@ -19,22 +19,48 @@ def detail_cmd(ctx, job_id):
 	try:
 		auth = AuthManager(data_dir, logger=logger)
 		client = BossClient(auth, delay=delay)
-		raw = client.job_detail(job_id)
+		raw = client.job_card(security_id, lid)
 
-		zp_data = raw.get("zpData", {})
-		detail = JobDetail.from_api(zp_data)
+		card = raw.get("zpData", {}).get("jobCard", {})
+		if not card:
+			emit_error(
+				"detail",
+				code="JOB_NOT_FOUND",
+				message="职位不存在或已下架",
+			)
+			return
+
+		job_id = card.get("encryptJobId", "")
 
 		cache = CacheStore(data_dir / "cache" / "boss_agent.db")
-		detail.greeted = cache.is_greeted(detail.security_id)
+		greeted = cache.is_greeted(security_id)
 		cache.close()
+
+		result = {
+			"job_id": job_id,
+			"title": card.get("jobName", ""),
+			"company": card.get("brandName", ""),
+			"salary": card.get("salaryDesc", ""),
+			"city": card.get("cityName", ""),
+			"experience": card.get("experienceName", ""),
+			"education": card.get("degreeName", ""),
+			"description": card.get("postDescription", ""),
+			"address": card.get("address", ""),
+			"skills": card.get("jobLabels", []),
+			"boss_name": card.get("bossName", ""),
+			"boss_title": card.get("bossTitle", ""),
+			"boss_active": card.get("activeTimeDesc", "离线"),
+			"security_id": security_id,
+			"greeted": greeted,
+		}
 
 		hints = {
 			"next_actions": [
-				"使用 boss greet {} {} 向招聘者打招呼".format(detail.security_id, detail.job_id),
-				"使用 boss search <query> 继续搜索其他职位",
+				f"boss greet {security_id} {job_id} — 向招聘者打招呼",
+				"boss search <query> — 继续搜索其他职位",
 			],
 		}
-		emit_success("detail", detail.to_dict(), hints=hints)
+		emit_success("detail", result, hints=hints)
 	except AuthRequired:
 		emit_error(
 			"detail",
