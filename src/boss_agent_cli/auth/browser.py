@@ -97,7 +97,8 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 			HOME_URL,
 		],
 		stdout=subprocess.DEVNULL,
-		stderr=subprocess.PIPE,
+		stderr=subprocess.DEVNULL,
+		start_new_session=True,
 	)
 
 	print(f"已启动 Chrome 并打开 BOSS 直聘主站。", file=sys.stderr)
@@ -176,7 +177,8 @@ def refresh_stoken(cookies: dict, user_agent: str) -> str:
 				HOME_URL,
 			],
 			stdout=subprocess.DEVNULL,
-			stderr=subprocess.PIPE,
+			stderr=subprocess.DEVNULL,
+			start_new_session=True,
 		)
 
 		ws_url = _wait_for_cdp(port)
