@@ -22,8 +22,20 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 		)
 		page = context.new_page()
 
-		# 阻止 BOSS 直聘的反自动化脚本调用 window.close() 关闭标签页
-		page.add_init_script("window.close = () => {}")
+		# 拦截 BOSS 直聘的反自动化：阻止 window.close() 和跳转 about:blank
+		page.add_init_script("""
+			window.close = () => {};
+			Object.defineProperty(window, 'location', {
+				configurable: false,
+				get() { return document.location; },
+				set(url) {
+					if (url === 'about:blank' || url === '') return;
+					document.location = url;
+				}
+			});
+		""")
+		# 路由层面也拦截 about:blank
+		context.route("about:blank", lambda route: route.abort())
 
 		page.goto(HOME_URL, wait_until="domcontentloaded")
 		print("已打开 BOSS 直聘主站。", file=sys.stderr)
