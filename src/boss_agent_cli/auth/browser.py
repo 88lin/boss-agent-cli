@@ -45,12 +45,6 @@ def _find_chrome() -> str:
 	)
 
 
-def _get_profile_dir() -> Path:
-	d = Path.home() / ".boss-agent" / "chrome-profile"
-	d.mkdir(parents=True, exist_ok=True)
-	return d
-
-
 def _kill_old_debug_chrome(port: int):
 	"""杀死可能占用调试端口的旧 Chrome 进程"""
 	try:
@@ -76,7 +70,6 @@ def _wait_for_cdp(port: int, max_wait: int = 10) -> str | None:
 		except Exception:
 			time.sleep(1)
 	return None
-	return False
 
 
 def login_via_browser(*, timeout: int = 120) -> dict:
@@ -85,10 +78,12 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 	Playwright 仅通过 CDP 连接读取数据，不注入自动化标记。
 	"""
 	chrome_path = _find_chrome()
-	profile_dir = _get_profile_dir()
 
-	# 清理可能残留的旧进程和损坏的 profile
+	# 清理残留进程和损坏的旧 profile
 	_kill_old_debug_chrome(_DEBUG_PORT)
+
+	# 每次用全新临时 profile，避免锁文件/损坏导致闪退
+	profile_dir = tempfile.mkdtemp(prefix="boss-agent-chrome-")
 
 	# 启动 Chrome 进程，打开主站（非登录页，避免 login.zhipin.com 的检测）
 	proc = subprocess.Popen(
