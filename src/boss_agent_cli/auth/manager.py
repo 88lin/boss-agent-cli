@@ -33,12 +33,13 @@ class AuthManager:
 		# 第一步：尝试从本地浏览器提取 Cookie
 		self._logger.info("尝试从本地浏览器提取 Cookie...")
 		token = extract_cookies(cookie_source)
-		if token:
-			# 验证 Cookie 是否有效
-			if self._verify_token(token):
+		if token and token.get("cookies", {}).get("wt2"):
+			# 有 wt2 说明浏览器已登录，先保存 Cookie
+			# stoken 可能为空——没关系，首次 API 调用 403 时 force_refresh 会自动补充
+			if self._verify_cookie(token):
 				self._store.save(token)
 				self._token = token
-				self._logger.info("Cookie 提取成功，已验证有效")
+				self._logger.info("Cookie 提取成功，已保存")
 				return token
 			self._logger.info("提取的 Cookie 已失效，降级到扫码登录")
 		else:
@@ -50,19 +51,20 @@ class AuthManager:
 		self._token = token
 		return token
 
-	def _verify_token(self, token: dict) -> bool:
-		"""通过 user_info API 验证 Token 是否有效"""
+	def _verify_cookie(self, token: dict) -> bool:
+		"""验证 Cookie 是否有效（不依赖 stoken，直接用 Cookie 请求用户信息）"""
 		try:
 			import httpx
 			from boss_agent_cli.api import endpoints
+			# 不传 stoken——user_info 接口即使 stoken 为空/错误也能返回用户信息
+			# 只要 Cookie（wt2）有效就会返回 code=0
 			resp = httpx.get(
 				endpoints.USER_INFO_URL,
 				cookies=token.get("cookies", {}),
 				headers={
-					"User-Agent": token.get("user_agent") or "Mozilla/5.0",
+					"User-Agent": token.get("user_agent") or "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
 					"Referer": "https://www.zhipin.com/",
 				},
-				params={"__zp_stoken__": token.get("stoken", "")},
 				timeout=10,
 			)
 			data = resp.json()

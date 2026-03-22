@@ -138,20 +138,6 @@ SCHEMA_DATA = {
 				"--page": {"type": "int", "default": 1, "description": "页码"},
 			},
 		},
-		"applied": {
-			"description": "查看已投递的职位列表",
-			"args": [],
-			"options": {
-				"--page": {"type": "int", "default": 1, "description": "页码"},
-			},
-		},
-		"chat": {
-			"description": "查看已沟通的招聘者列表",
-			"args": [],
-			"options": {
-				"--page": {"type": "int", "default": 1, "description": "页码"},
-			},
-		},
 		"export": {
 			"description": "导出搜索结果为 CSV 或 JSON 文件",
 			"args": [
