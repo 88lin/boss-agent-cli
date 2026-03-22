@@ -114,11 +114,3 @@ class BossClient:
 	def recommend_jobs(self, page: int = 1) -> dict:
 		params = {"page": page}
 		return self._request("GET", endpoints.RECOMMEND_URL, params=params)
-
-	def applied_list(self, page: int = 1) -> dict:
-		params = {"page": page}
-		return self._request("GET", endpoints.APPLIED_URL, params=params)
-
-	def chat_list(self, page: int = 1) -> dict:
-		params = {"page": page}
-		return self._request("GET", endpoints.CHAT_LIST_URL, params=params)
