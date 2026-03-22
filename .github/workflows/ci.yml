@@ -29,4 +29,12 @@ jobs:
         run: uv run pytest tests/ -v
 
       - name: Verify CLI entry point
-        run: uv run boss schema | python -c "import json,sys; d=json.load(sys.stdin); assert d['ok']; print(f'Commands: {len(d[\"data\"][\"commands\"])}')"
+        run: |
+          uv run boss schema > /tmp/schema.json
+          python3 -c "
+          import json
+          with open('/tmp/schema.json') as f:
+              d = json.load(f)
+          assert d['ok'], 'schema not ok'
+          print(f'Commands: {len(d[\"data\"][\"commands\"])}')
+          "
