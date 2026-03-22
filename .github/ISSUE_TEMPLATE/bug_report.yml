@@ -1,0 +1,33 @@
+name: Bug Report
+description: 报告一个 Bug
+labels: ["bug"]
+body:
+  - type: textarea
+    attributes:
+      label: 问题描述
+      description: 清晰描述遇到的问题
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: 复现步骤
+      description: 按步骤描述如何复现
+      value: |
+        1. 执行命令 `boss ...`
+        2. 观察到 ...
+        3. 期望的结果是 ...
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: 错误输出
+      description: 粘贴完整的 JSON 错误输出
+      render: json
+  - type: input
+    attributes:
+      label: Python 版本
+      placeholder: "3.10"
+  - type: input
+    attributes:
+      label: 操作系统
+      placeholder: "macOS 15.3 / Ubuntu 22.04 / Windows 11"

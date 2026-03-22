@@ -1,0 +1,34 @@
+# Contributing
+
+感谢你对 boss-agent-cli 的关注！
+
+## 开发环境
+
+```bash
+git clone https://github.com/can4hou6joeng4/boss-agent-cli.git
+cd boss-agent-cli
+uv sync --all-extras
+uv run pytest tests/ -v
+```
+
+## 编码规范
+
+- 缩进使用 **tab**
+- Python >= 3.10（使用 `X | Y` 联合类型）
+- commit message：`type: 中文描述`（feat / fix / refactor / docs / test / chore）
+
+## 提交流程
+
+1. Fork 本仓库
+2. 创建功能分支：`git checkout -b feat/your-feature`
+3. 编写测试 → 实现功能 → 确保测试通过
+4. 提交并推送
+5. 创建 Pull Request
+
+## 添加新命令
+
+1. 在 `src/boss_agent_cli/commands/` 下新建文件
+2. 在 `main.py` 中注册命令
+3. 在 `schema.py` 中添加命令描述
+4. 在 `tests/test_commands.py` 中添加测试
+5. 更新 `skills/SKILL.md`

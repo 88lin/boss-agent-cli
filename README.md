@@ -1,56 +1,182 @@
+<div align="center">
+
 # boss-agent-cli
 
-专为 AI Agent 设计的 BOSS 直聘求职 CLI 工具。所有输出为结构化 JSON，通过 stdout 输出。
+**专为 AI Agent 设计的 BOSS 直聘求职 CLI 工具**
+
+搜索职位 · 福利筛选 · 个性化推荐 · 自动打招呼 · 导出数据
+
+[![Python](https://img.shields.io/badge/Python-≥3.10-3776AB?logo=python&logoColor=white)](https://python.org)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+[English](#features) · [安装](#安装) · [快速开始](#快速开始) · [AI Agent 集成](#ai-agent-集成) · [命令参考](#命令参考)
+
+</div>
+
+---
+
+## 特性
+
+- **AI Agent 友好** — 所有输出为结构化 JSON，`boss schema` 自描述协议让 Agent 一次调用就理解全部能力
+- **福利精准筛选** — `--welfare "双休,五险一金"` 自动翻页逐个检查职位详情，只返回匹配结果
+- **免扫码登录** — 优先从本地浏览器提取 Cookie（支持 Chrome/Firefox/Edge 等 10+ 浏览器），失败才弹出扫码
+- **反检测登录** — 基于 [patchright](https://github.com/nichochar/patchright)（Playwright 反检测 fork），从二进制层面修补自动化标记
+- **智能反爬** — 高斯分布请求延迟 + 指数退避重试，模拟人类操作节奏
+- **错误自愈** — 每个错误响应包含 `recovery_action`，Agent 可自动修复
 
 ## 安装
 
 ```bash
+# 安装 CLI 工具
 uv tool install boss-agent-cli
-playwright install chromium
+
+# 安装浏览器（用于登录）
+patchright install chromium
+```
+
+<details>
+<summary>从源码安装</summary>
+
+```bash
+git clone https://github.com/can4hou6joeng4/boss-agent-cli.git
+cd boss-agent-cli
+uv sync --all-extras
+uv run patchright install chromium
+```
+
+</details>
+
+## 快速开始
+
+```bash
+# 1. 登录（优先免扫码，失败弹出浏览器）
+boss login
+
+# 2. 搜索广州的 Golang 职位，要求双休+五险一金
+boss search "Golang" --city 广州 --welfare "双休,五险一金"
+
+# 3. 查看职位详情
+boss detail <security_id>
+
+# 4. 向招聘者打招呼
+boss greet <security_id> <job_id>
+
+# 5. 获取个性化推荐
+boss recommend
+
+# 6. 导出 50 条搜索结果为 CSV
+boss export "Golang" --city 广州 --count 50 -o jobs.csv
 ```
 
 ## AI Agent 集成
 
-Agent 首次接触工具时调用 `boss schema` 获取完整能力描述：
+### 方式一：Skill 安装（推荐）
 
 ```bash
-boss schema
+npx skills add can4hou6joeng4/boss-agent-cli
 ```
 
-典型调用链：
+安装后 Agent 自动获得调用 `boss` 命令的能力，无需手动配置。
 
-```bash
-boss schema                                        # 理解工具能力
-boss status                                        # 检查登录态
-boss login                                         # 扫码登录（需用户手动扫码）
-boss search "golang" --city 杭州 --salary 20-50K    # 搜索职位
-boss detail <job_id>                               # 查看详情
-boss greet <security_id> <job_id>                  # 打招呼
-boss batch-greet "golang" --city 杭州 --count 5     # 批量打招呼
+### 方式二：手动配置
+
+在 AI Agent 的规则文件中添加：
+
+```markdown
+当用户要求搜索职位、投递、打招呼等 BOSS 直聘操作时，通过 Bash 调用 `boss` CLI：
+1. 运行 `boss status` 检查登录态
+2. 若未登录，运行 `boss login` 提示用户扫码
+3. 根据用户意图调用 search / recommend / detail / greet
+4. 解析 stdout JSON，`ok` 字段判断成败
+5. 用户提到福利要求时使用 `--welfare` 参数
 ```
 
-## 输出格式
+### 输出协议
+
+所有命令输出 JSON 到 stdout：
 
 ```json
 {
   "ok": true,
   "schema_version": "1.0",
   "command": "search",
-  "data": {},
-  "pagination": null,
+  "data": [...],
+  "pagination": {"page": 1, "has_more": true, "total": 15},
   "error": null,
-  "hints": {"next_actions": ["boss detail <job_id> — 查看详情"]}
+  "hints": {"next_actions": ["boss detail <security_id>"]}
 }
 ```
 
-- `stdout`: JSON 数据
-- `stderr`: 日志（通过 `--log-level` 控制）
-- `exit 0`: 成功
-- `exit 1`: 失败
+| 约定 | 说明 |
+|------|------|
+| `stdout` | 仅 JSON 结构化数据 |
+| `stderr` | 日志和进度信息 |
+| `exit 0` | 命令成功 (`ok=true`) |
+| `exit 1` | 命令失败 (`ok=false`) |
+
+## 命令参考
+
+| 命令 | 说明 |
+|------|------|
+| `boss login` | 登录（Cookie 提取优先，失败扫码） |
+| `boss status` | 检查登录态 |
+| `boss search <query>` | 搜索职位（支持 `--welfare` 福利筛选） |
+| `boss recommend` | 个性化推荐 |
+| `boss detail <security_id>` | 职位详情（描述、地址、技能） |
+| `boss greet <security_id> <job_id>` | 向招聘者打招呼 |
+| `boss batch-greet <query>` | 批量打招呼（上限 10） |
+| `boss export <query>` | 导出搜索结果（CSV / JSON） |
+| `boss cities` | 列出支持的 40 个城市 |
+| `boss schema` | 输出完整能力描述（Agent 自描述） |
+
+### 搜索筛选参数
+
+```bash
+boss search "golang" \
+  --city 广州 \             # 城市（40 个可选，用 boss cities 查看）
+  --salary 20-50K \         # 薪资范围
+  --experience 3-5年 \      # 经验要求
+  --education 本科 \        # 学历要求
+  --scale 100-499人 \       # 公司规模
+  --welfare "双休,五险一金"  # 福利筛选（逗号分隔，AND 逻辑）
+```
+
+### 福利筛选
+
+`--welfare` 是本工具的核心特色功能：
+
+```bash
+# 单条件
+boss search "Python" --welfare 双休
+
+# 多条件组合（AND 逻辑，所有条件都必须满足）
+boss search "Golang" --city 广州 --welfare "双休,五险一金,年终奖"
+```
+
+工作原理：
+1. 先检查职位的福利标签（`welfareList`）
+2. 标签不匹配时自动调用 `card.json` 获取职位描述全文搜索
+3. 自动翻页（最多 5 页）直到找到所有匹配结果
+4. 每个结果带 `welfare_match` 字段说明匹配来源
+
+支持的福利关键词：`双休` `五险一金` `年终奖` `餐补` `住房补贴` `定期体检` `股票期权` `加班补助` `带薪年假`
+
+## 错误处理
+
+| 错误码 | 含义 | Agent 自动修复 |
+|--------|------|---------------|
+| `AUTH_REQUIRED` | 未登录 | `boss login` |
+| `AUTH_EXPIRED` | 登录过期 | `boss login` |
+| `RATE_LIMITED` | 频率过高 | 等待后重试 |
+| `TOKEN_REFRESH_FAILED` | Token 刷新失败 | `boss login` |
+| `INVALID_PARAM` | 参数错误 | 修正参数 |
+| `ALREADY_GREETED` | 已打过招呼 | 跳过 |
+| `GREET_LIMIT` | 今日次数用完 | 告知用户 |
+| `NETWORK_ERROR` | 网络错误 | 重试 |
 
 ## 配置
 
-`~/.boss-agent/config.json`:
+`~/.boss-agent/config.json`：
 
 ```json
 {
@@ -64,6 +190,31 @@ boss batch-greet "golang" --city 杭州 --count 5     # 批量打招呼
 }
 ```
 
+## 技术架构
+
+```
+CLI (Click)  →  AuthManager  →  patchright (登录/Token刷新)
+                    ↓
+              BossClient (httpx)  →  BOSS 直聘 wapi
+                    ↓
+              CacheStore (SQLite WAL)
+                    ↓
+              output.py  →  JSON 信封  →  stdout
+```
+
+- **认证**：patchright 反检测浏览器扫码 + browser-cookie3 本地提取
+- **反爬**：高斯分布延迟 + 指数退避 + stoken 浏览器环境生成
+- **缓存**：SQLite WAL 模式，搜索 100 条上限 + 24h TTL
+- **加密**：Fernet 对称加密 + PBKDF2 机器绑定密钥
+
+## 致谢
+
+本项目参考了以下优秀开源项目的设计理念：
+
+- [geekgeekrun](https://github.com/geekgeekrun/geekgeekrun) — 浏览器自动化 + 反检测策略
+- [boss-cli](https://github.com/jackwener/boss-cli) — CLI 结构化输出 + Agent 友好设计
+- [opencli](https://github.com/jackwener/opencli) — Browser Bridge 架构理念
+
 ## 许可证
 
-MIT
+[MIT](LICENSE)

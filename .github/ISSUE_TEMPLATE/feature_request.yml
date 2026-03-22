@@ -1,0 +1,21 @@
+name: Feature Request
+description: 提交一个功能建议
+labels: ["enhancement"]
+body:
+  - type: textarea
+    attributes:
+      label: 功能描述
+      description: 你希望添加什么功能？
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: 使用场景
+      description: 在什么场景下需要这个功能？
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: 期望的命令格式
+      description: 你期望的命令和输出格式是什么样的？
+      render: bash
