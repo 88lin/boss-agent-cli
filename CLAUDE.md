@@ -1,5 +1,10 @@
 # boss-agent-cli
 
+# Agent Team PUA 配置
+所有 teammate 开工前必须加载 pua skill。
+teammate 失败 2 次以上时向 Leader 发送 [PUA-REPORT] 格式汇报。
+Leader 负责全局压力等级管理和跨 teammate 失败传递。
+
 ## 项目愿景
 
 专为 AI Agent 设计的 BOSS 直聘求职 CLI 工具。结合 geekgeekrun（浏览器自动化 + 反检测）和 boss-cli（CLI + 结构化输出）的优势，让 AI Agent 通过 subprocess 调用 CLI、读取 stdout JSON 输出，完成完整的求职操作链。

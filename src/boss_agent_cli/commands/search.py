@@ -123,7 +123,7 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 			pagination = {"page": 1, "has_more": False, "total": len(items)}
 			hints = {
 				"next_actions": [
-					"使用 boss detail <job_id> 查看职位详情",
+					"使用 boss detail <security_id> 查看职位详情",
 					"使用 boss greet <security_id> <job_id> 打招呼",
 				],
 			}
@@ -149,7 +149,7 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 			}
 			hints = {
 				"next_actions": [
-					"使用 boss detail <job_id> 查看职位详情",
+					"使用 boss detail <security_id> 查看职位详情",
 					"使用 boss greet <security_id> <job_id> 打招呼",
 					"使用 boss search <query> --page {} 查看下一页".format(page + 1),
 				],

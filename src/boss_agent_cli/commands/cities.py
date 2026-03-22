@@ -11,4 +11,8 @@ def cities_cmd():
 	emit_success("cities", {
 		"count": len(cities),
 		"cities": cities,
+	}, hints={
+		"next_actions": [
+			"boss search <query> --city <城市名> — 搜索指定城市的职位",
+		],
 	})

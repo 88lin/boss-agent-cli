@@ -16,12 +16,18 @@ def login_cmd(ctx, timeout, cookie_source):
 	try:
 		token = auth.login(timeout=timeout, cookie_source=cookie_source)
 		method = "Cookie 提取" if not token.get("stoken") and token.get("cookies") else "扫码登录"
-		emit_success("login", {"message": f"登录成功（{method}）"})
+		emit_success("login", {"message": f"登录成功（{method}）"}, hints={
+			"next_actions": [
+				"boss status — 验证登录态",
+				"boss search <query> — 搜索职位",
+				"boss recommend — 获取个性化推荐",
+			],
+		})
 	except Exception as e:
 		emit_error(
 			"login",
 			code="NETWORK_ERROR",
 			message=f"登录失败: {e}",
 			recoverable=True,
-			recovery_action="重试 boss login",
+			recovery_action="boss login",
 		)

@@ -29,6 +29,8 @@ def greet_cmd(ctx, security_id, job_id, message):
 			"greet",
 			code="ALREADY_GREETED",
 			message="已向该招聘者打过招呼",
+			recoverable=False,
+			hints={"next_actions": ["boss search <query> — 搜索其他职位"]},
 		)
 		return
 
@@ -44,6 +46,11 @@ def greet_cmd(ctx, security_id, job_id, message):
 			"security_id": security_id,
 			"job_id": job_id,
 			"message": "打招呼成功",
+		}, hints={
+			"next_actions": [
+				"boss search <query> — 继续搜索其他职位",
+				"boss recommend — 获取个性化推荐",
+			],
 		})
 	except AuthRequired:
 		cache.close()

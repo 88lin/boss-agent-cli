@@ -57,12 +57,21 @@ def export_cmd(ctx, query, city, salary, count, fmt, output):
 				"count": len(all_items),
 				"format": fmt,
 				"path": output,
+			}, hints={
+				"next_actions": [
+					"boss search <query> — 继续搜索",
+					"boss recommend — 获取个性化推荐",
+				],
 			})
 		else:
 			emit_success("export", {
 				"count": len(all_items),
 				"format": fmt,
 				"jobs": all_items,
+			}, hints={
+				"next_actions": [
+					"boss export <query> -o file.csv — 导出到文件",
+				],
 			})
 	except AuthRequired:
 		emit_error("export", code="AUTH_REQUIRED", message="未登录", recoverable=True, recovery_action="boss login")
