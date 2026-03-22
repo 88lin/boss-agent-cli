@@ -60,10 +60,10 @@ graph TD
 | 模块路径 | 语言 | 职责 | 入口文件 | 测试 |
 |----------|------|------|----------|------|
 | `src/boss_agent_cli/` | Python | 包根目录，版本号 | `__init__.py` | - |
-| `src/boss_agent_cli/auth/` | Python | Token 生命周期：加密存储、浏览器登录、stoken 刷新、文件锁 | `manager.py` | `tests/test_auth.py` |
-| `src/boss_agent_cli/api/` | Python | wapi 端点常量、数据模型 (dataclass)、httpx 统一请求入口 | `client.py` | `tests/test_api.py` |
+| `src/boss_agent_cli/auth/` | Python | Token 生命周期：加密存储、Cookie 提取、patchright 扫码登录、stoken 刷新、文件锁 | `manager.py` | `tests/test_auth.py` |
+| `src/boss_agent_cli/api/` | Python | wapi 端点常量、数据模型 (dataclass)、httpx 统一请求（高斯抖动+指数退避） | `client.py` | `tests/test_api.py` |
 | `src/boss_agent_cli/cache/` | Python | SQLite WAL 缓存（搜索历史 100 条上限、已打招呼记录） | `store.py` | `tests/test_cache.py` |
-| `src/boss_agent_cli/commands/` | Python | Click CLI 命令：schema/login/status/search/detail/greet/batch-greet | `search.py`, `greet.py` | `tests/test_commands.py` |
+| `src/boss_agent_cli/commands/` | Python | Click CLI 命令：schema/login/status/search/detail/greet/batch-greet/recommend/export/cities | `search.py`, `greet.py` | `tests/test_commands.py` |
 | `src/boss_agent_cli/output.py` | Python | JSON 信封封装 + Logger（stderr 日志级别过滤） | - | `tests/test_output.py` |
 | `src/boss_agent_cli/config.py` | Python | 配置文件读取与默认值 (`~/.boss-agent/config.json`) | - | `tests/test_output.py` |
 | `src/boss_agent_cli/main.py` | Python | Click CLI group 入口 + 全局选项 + 配置加载 | - | `tests/test_commands.py` |
@@ -75,7 +75,8 @@ graph TD
 | 语言 | Python | >=3.10 |
 | CLI 框架 | Click | >=8.0 |
 | HTTP 客户端 | httpx | >=0.27 |
-| 浏览器自动化 | Playwright + playwright-stealth | >=1.40 / >=1.0 |
+| 浏览器自动化 | patchright（Playwright 反检测 fork） | >=1.58.2 |
+| Cookie 提取 | browser-cookie3 | >=0.16.2 |
 | 加密 | cryptography (Fernet + PBKDF2) | >=42.0 |
 | 数据库 | sqlite3（标准库，WAL 模式） | - |
 | 包管理/构建 | uv + hatchling | - |
@@ -155,17 +156,23 @@ uv run pytest tests/ -v
 
 **Agent 典型调用链**：
 ```
-boss schema   -> 理解工具能力
-boss status   -> 检查登录态
-boss login    -> 若未登录，提示用户扫码
-boss search   -> 搜索职位（返回含 security_id 的列表）
-boss detail   -> 查看详情（可选，返回也含 security_id）
-boss greet    -> 打招呼（security_id 可从 search 或 detail 获取）
+boss schema     -> 理解工具能力（9 个命令）
+boss status     -> 检查登录态
+boss login      -> 若未登录（优先 Cookie 提取，失败扫码）
+boss search     -> 搜索职位（支持 --welfare 福利筛选）
+boss recommend  -> 或获取个性化推荐
+boss detail     -> 查看详情（参数为 security_id）
+boss greet      -> 打招呼（security_id + job_id）
+boss export     -> 导出搜索结果为 CSV/JSON
+boss cities     -> 查看支持城市列表
 ```
 
 **关键设计决策**：
-- `boss detail` 不是 `boss greet` 的必要前置步骤。Agent 可从 `boss search` 结果直接获取 `security_id` 进行打招呼
-- 信封格式中的 `hints.next_actions` 字段为 Agent 提供下一步行动建议
+- `boss login` 优先从本地浏览器提取 Cookie（免扫码），失败才弹出 patchright 扫码
+- `boss detail` 参数是 `security_id`（非 job_id），从 search/recommend 结果获取
+- `--welfare "双休,五险一金"` 支持逗号分隔多条件 AND 筛选，自动翻页查详情
+- 请求延迟使用高斯分布，403 重试使用指数退避
+- 信封格式中的 `hints.next_actions` 为 Agent 提供下一步行动建议
 - `boss schema` 返回完整工具自描述，Agent 调用一次即可理解所有命令
 
 **相关文档**：

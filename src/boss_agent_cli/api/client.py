@@ -62,7 +62,17 @@ class BossClient:
 			return self._request(method, url, _retry_count=_retry_count + 1, **kwargs)
 
 		resp.raise_for_status()
-		return resp.json()
+		data = resp.json()
+
+		# code=37 表示 stoken 过期（"您的环境存在异常"），自动刷新重试
+		if data.get("code") == 37 and _retry_count < _MAX_RETRIES:
+			backoff = 2 ** _retry_count + random.uniform(0, 1)
+			time.sleep(backoff)
+			self._auth.force_refresh()
+			self._client = None
+			return self._request(method, url, _retry_count=_retry_count + 1, **kwargs)
+
+		return data
 
 	def search_jobs(self, query: str, **filters) -> dict:
 		params = {"query": query, "page": filters.get("page", 1)}
