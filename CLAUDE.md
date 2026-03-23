@@ -63,7 +63,7 @@ graph TD
 | `src/boss_agent_cli/auth/` | Python | Token 生命周期：加密存储、Cookie 提取、patchright 扫码登录、stoken 刷新、文件锁 | `manager.py` | `tests/test_auth.py` |
 | `src/boss_agent_cli/api/` | Python | wapi 端点常量、数据模型 (dataclass)、httpx 统一请求（高斯抖动+指数退避） | `client.py` | `tests/test_api.py` |
 | `src/boss_agent_cli/cache/` | Python | SQLite WAL 缓存（搜索历史 100 条上限、已打招呼记录） | `store.py` | `tests/test_cache.py` |
-| `src/boss_agent_cli/commands/` | Python | Click CLI 命令：schema/login/status/search/detail/greet/batch-greet/recommend/export/cities | `search.py`, `greet.py` | `tests/test_commands.py` |
+| `src/boss_agent_cli/commands/` | Python | Click CLI 命令：schema/login/status/search/detail/greet/batch-greet/recommend/export/cities/me | `search.py`, `greet.py`, `me.py` | `tests/test_commands.py` |
 | `src/boss_agent_cli/output.py` | Python | JSON 信封封装 + Logger（stderr 日志级别过滤） | - | `tests/test_output.py` |
 | `src/boss_agent_cli/config.py` | Python | 配置文件读取与默认值 (`~/.boss-agent/config.json`) | - | `tests/test_output.py` |
 | `src/boss_agent_cli/main.py` | Python | Click CLI group 入口 + 全局选项 + 配置加载 | - | `tests/test_commands.py` |
@@ -156,9 +156,10 @@ uv run pytest tests/ -v
 
 **Agent 典型调用链**：
 ```
-boss schema     -> 理解工具能力（9 个命令）
+boss schema     -> 理解工具能力（10 个命令）
 boss status     -> 检查登录态
 boss login      -> 若未登录（优先 Cookie 提取，失败扫码）
+boss me         -> 获取用户信息（基本信息/简历/求职期望/投递记录）
 boss search     -> 搜索职位（支持 --welfare 福利筛选）
 boss recommend  -> 或获取个性化推荐
 boss detail     -> 查看详情（参数为 security_id）

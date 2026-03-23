@@ -24,6 +24,9 @@ class BossClient:
     def job_detail(self, job_id: str) -> dict
     def greet(self, security_id: str, job_id: str, message: str = "") -> dict
     def user_info(self) -> dict
+    def resume_baseinfo(self) -> dict
+    def resume_expect(self) -> dict
+    def deliver_list(self, page: int = 1) -> dict
 ```
 
 ### 异常类
@@ -39,7 +42,10 @@ class BossClient:
 | `SEARCH_URL` | `/wapi/zpgeek/search/joblist.json` |
 | `DETAIL_URL` | `/wapi/zpgeek/job/detail.json` |
 | `GREET_URL` | `/wapi/zpgeek/friend/add.json` |
-| `USER_INFO_URL` | `/wapi/zpgeek/common/user/info.json` |
+| `USER_INFO_URL` | `/wapi/zpuser/wap/getUserInfo.json` |
+| `RESUME_BASEINFO_URL` | `/wapi/zpgeek/resume/baseinfo/query.json` |
+| `RESUME_EXPECT_URL` | `/wapi/zpgeek/resume/expect/query.json` |
+| `DELIVER_LIST_URL` | `/wapi/zprelation/resume/geekDeliverList` |
 
 ### 编码映射表
 

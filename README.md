@@ -120,6 +120,7 @@ npx skills add can4hou6joeng4/boss-agent-cli
 |------|------|
 | `boss login` | 登录（Cookie 提取优先，失败扫码） |
 | `boss status` | 检查登录态 |
+| `boss me` | 我的信息（用户/简历/期望/投递记录） |
 | `boss search <query>` | 搜索职位（支持 `--welfare` 福利筛选） |
 | `boss recommend` | 个性化推荐 |
 | `boss detail <security_id>` | 职位详情（描述、地址、技能） |
