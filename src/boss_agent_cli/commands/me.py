@@ -17,7 +17,7 @@ def me_cmd(ctx, section, deliver_page):
 	logger = ctx.obj.get("logger")
 
 	try:
-		auth = AuthManager(data_dir / "auth")
+		auth = AuthManager(data_dir, logger=logger)
 		client = BossClient(auth, delay=delay)
 		result = {}
 
@@ -65,8 +65,8 @@ def me_cmd(ctx, section, deliver_page):
 		})
 
 	except (AuthRequired, TokenRefreshFailed):
-		emit_error("me", "AUTH_REQUIRED", "未登录", recoverable=True, recovery_action="boss login")
+		emit_error("me", code="AUTH_REQUIRED", message="未登录", recoverable=True, recovery_action="boss login")
 	except AuthError:
-		emit_error("me", "AUTH_EXPIRED", "登录态过期", recoverable=True, recovery_action="boss login")
+		emit_error("me", code="AUTH_EXPIRED", message="登录态过期", recoverable=True, recovery_action="boss login")
 	except Exception as e:
-		emit_error("me", "NETWORK_ERROR", str(e), recoverable=True, recovery_action="重试")
+		emit_error("me", code="NETWORK_ERROR", message=str(e), recoverable=True, recovery_action="重试")
