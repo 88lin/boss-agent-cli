@@ -171,7 +171,17 @@ class BossClient:
 			if code:
 				params["scale"] = code
 		if industry := filters.get("industry"):
-			params["industry"] = industry
+			code = endpoints.INDUSTRY_CODES.get(industry)
+			if code:
+				params["industry"] = code
+		if stage := filters.get("stage"):
+			code = endpoints.STAGE_CODES.get(stage)
+			if code:
+				params["stage"] = code
+		if job_type := filters.get("job_type"):
+			code = endpoints.JOB_TYPE_CODES.get(job_type)
+			if code:
+				params["jobType"] = code
 		return self._browser_request("GET", endpoints.SEARCH_URL, params=params)
 
 	def recommend_jobs(self, page: int = 1) -> dict:
@@ -208,3 +218,13 @@ class BossClient:
 	def deliver_list(self, page: int = 1) -> dict:
 		params = {"page": page}
 		return self._request("GET", endpoints.DELIVER_LIST_URL, params=params)
+
+	def friend_list(self) -> dict:
+		return self._request("GET", endpoints.FRIEND_LIST_URL)
+
+	def interview_data(self) -> dict:
+		return self._request("GET", endpoints.INTERVIEW_DATA_URL)
+
+	def job_history(self, page: int = 1) -> dict:
+		params = {"page": page}
+		return self._request("GET", endpoints.JOB_HISTORY_URL, params=params)

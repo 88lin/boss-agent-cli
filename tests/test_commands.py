@@ -111,7 +111,12 @@ def test_schema_includes_new_commands():
 	assert "export" in commands
 	assert "cities" in commands
 	assert "me" in commands
-	assert len(commands) == 10
+	assert "show" in commands
+	assert "history" in commands
+	assert "chat" in commands
+	assert "interviews" in commands
+	assert "logout" in commands
+	assert len(commands) == 15
 
 
 @patch("boss_agent_cli.commands.recommend.CacheStore")

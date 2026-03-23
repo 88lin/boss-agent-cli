@@ -17,6 +17,9 @@ USER_INFO_URL = f"{BASE_URL}/wapi/zpuser/wap/getUserInfo.json"
 RESUME_BASEINFO_URL = f"{BASE_URL}/wapi/zpgeek/resume/baseinfo/query.json"
 RESUME_EXPECT_URL = f"{BASE_URL}/wapi/zpgeek/resume/expect/query.json"
 DELIVER_LIST_URL = f"{BASE_URL}/wapi/zprelation/resume/geekDeliverList"
+FRIEND_LIST_URL = f"{BASE_URL}/wapi/zprelation/friend/getGeekFriendList.json"
+INTERVIEW_DATA_URL = f"{BASE_URL}/wapi/zpinterview/geek/interview/data.json"
+JOB_HISTORY_URL = f"{BASE_URL}/wapi/zpgeek/history/joblist.json"
 
 # ── Browser-like headers ─────────────────────────────────────────────
 DEFAULT_HEADERS = {
@@ -49,6 +52,8 @@ REFERER_MAP = {
 	RESUME_BASEINFO_URL: WEB_GEEK_RESUME_URL,
 	RESUME_EXPECT_URL: WEB_GEEK_RESUME_URL,
 	DELIVER_LIST_URL: WEB_GEEK_CHAT_URL,
+	FRIEND_LIST_URL: WEB_GEEK_CHAT_URL,
+	JOB_HISTORY_URL: WEB_GEEK_JOB_URL,
 }
 
 CITY_CODES = {
@@ -85,4 +90,50 @@ EDUCATION_CODES = {
 SCALE_CODES = {
 	"0-20人": "301", "20-99人": "302", "100-499人": "303",
 	"500-999人": "304", "1000-9999人": "305", "10000人以上": "306",
+}
+
+INDUSTRY_CODES: dict[str, str] = {
+	"不限": "0",
+	"互联网": "100020",
+	"电子商务": "100021",
+	"游戏": "100024",
+	"软件/信息服务": "100032",
+	"人工智能": "100901",
+	"大数据": "100902",
+	"云计算": "100903",
+	"区块链": "100904",
+	"物联网": "100905",
+	"金融": "100101",
+	"银行": "100102",
+	"保险": "100103",
+	"证券/基金": "100104",
+	"教育培训": "100200",
+	"医疗健康": "100300",
+	"房地产": "100400",
+	"汽车": "100500",
+	"物流/运输": "100600",
+	"广告/传媒": "100700",
+	"消费品": "100800",
+	"制造业": "101000",
+	"能源/环保": "101100",
+	"政府/非营利": "101200",
+	"农业": "101300",
+}
+
+STAGE_CODES: dict[str, str] = {
+	"不限": "0",
+	"未融资": "801",
+	"天使轮": "802",
+	"A轮": "803",
+	"B轮": "804",
+	"C轮": "805",
+	"D轮及以上": "806",
+	"已上市": "807",
+	"不需要融资": "808",
+}
+
+JOB_TYPE_CODES: dict[str, str] = {
+	"全职": "1901",
+	"兼职": "1903",
+	"实习": "1903",
 }

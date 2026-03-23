@@ -2,7 +2,7 @@ import click
 
 from boss_agent_cli.api.client import BossClient
 from boss_agent_cli.auth.manager import AuthManager, AuthRequired, TokenRefreshFailed
-from boss_agent_cli.output import emit_error, emit_success
+from boss_agent_cli.display import handle_error_output, handle_output, render_status
 
 
 @click.command("status")
@@ -16,12 +16,11 @@ def status_cmd(ctx):
 
 	token = auth.check_status()
 	if token is None:
-		emit_error(
-			"status",
+		handle_error_output(
+			ctx, "status",
 			code="AUTH_REQUIRED",
 			message="未登录，请先执行 boss login",
-			recoverable=True,
-			recovery_action="boss login",
+			recoverable=True, recovery_action="boss login",
 		)
 		return
 
@@ -29,32 +28,30 @@ def status_cmd(ctx):
 		client = BossClient(auth, delay=delay)
 		info = client.user_info()
 		user_name = info.get("zpData", {}).get("name", "未知用户")
-		emit_success("status", {
+		data = {
 			"logged_in": True,
 			"user_name": user_name,
 			"token_expires_in": None,
-		})
+		}
+		handle_output(ctx, "status", data, render=render_status)
 	except AuthRequired:
-		emit_error(
-			"status",
+		handle_error_output(
+			ctx, "status",
 			code="AUTH_REQUIRED",
 			message="登录态已失效，请重新登录",
-			recoverable=True,
-			recovery_action="boss login",
+			recoverable=True, recovery_action="boss login",
 		)
 	except TokenRefreshFailed:
-		emit_error(
-			"status",
+		handle_error_output(
+			ctx, "status",
 			code="TOKEN_REFRESH_FAILED",
 			message="Token 刷新失败，请重新登录",
-			recoverable=True,
-			recovery_action="boss login",
+			recoverable=True, recovery_action="boss login",
 		)
 	except Exception as e:
-		emit_error(
-			"status",
+		handle_error_output(
+			ctx, "status",
 			code="NETWORK_ERROR",
 			message=f"验证登录态失败: {e}",
-			recoverable=True,
-			recovery_action="重试",
+			recoverable=True, recovery_action="重试",
 		)

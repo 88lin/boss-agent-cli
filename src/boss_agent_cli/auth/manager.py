@@ -91,3 +91,8 @@ class AuthManager:
 
 	def check_status(self) -> dict | None:
 		return self._store.load()
+
+	def logout(self) -> None:
+		"""清除本地登录态"""
+		self._store.clear()
+		self._token = None

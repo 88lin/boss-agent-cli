@@ -80,6 +80,10 @@ class TokenStore:
 		plaintext = fernet.decrypt(encrypted)
 		return json.loads(plaintext)
 
+	def clear(self) -> None:
+		"""删除 session.enc 文件（保留 salt 供下次登录复用）"""
+		self._session_path.unlink(missing_ok=True)
+
 	@contextmanager
 	def refresh_lock(self):
 		deadline = time.time() + _LOCK_TIMEOUT

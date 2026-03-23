@@ -1,0 +1,185 @@
+"""Rich terminal rendering + TTY-aware output routing.
+
+TTY mode: Rich tables/panels to stderr, nothing to stdout.
+Pipe mode (Agent): JSON envelope to stdout.
+--json flag: Force JSON to stdout even in TTY.
+"""
+
+import sys
+from typing import Any, Callable
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+from boss_agent_cli.output import emit_success
+
+# Rich output goes to stderr so stdout stays clean for Agent JSON
+console = Console(stderr=True)
+
+
+def is_json_mode(ctx) -> bool:
+	"""Check if --json flag is set or stdout is piped (non-TTY)."""
+	force_json = ctx.obj.get("json_output", False) if ctx and ctx.obj else False
+	return force_json or not sys.stdout.isatty()
+
+
+def handle_output(
+	ctx,
+	command: str,
+	data: Any,
+	*,
+	render: Callable[[Any], None] | None = None,
+	pagination: dict | None = None,
+	hints: dict | None = None,
+) -> None:
+	"""Smart output: TTY -> rich render, pipe -> JSON envelope."""
+	if is_json_mode(ctx):
+		emit_success(command, data, pagination=pagination, hints=hints)
+	elif render:
+		render(data)
+	else:
+		# Fallback: no render function, emit JSON even in TTY
+		emit_success(command, data, pagination=pagination, hints=hints)
+
+
+def handle_error_output(
+	ctx,
+	command: str,
+	*,
+	code: str,
+	message: str,
+	recoverable: bool = False,
+	recovery_action: str | None = None,
+	hints: dict | None = None,
+) -> None:
+	"""Smart error output: TTY -> rich error, pipe -> JSON error envelope."""
+	from boss_agent_cli.output import emit_error
+
+	if is_json_mode(ctx):
+		emit_error(
+			command, code=code, message=message,
+			recoverable=recoverable, recovery_action=recovery_action,
+			hints=hints,
+		)
+	else:
+		console.print(f"[red]error[/red] [{code}] {message}")
+		if recovery_action:
+			console.print(f"  [dim]recovery: {recovery_action}[/dim]")
+		sys.exit(1)
+
+
+# ── Table builders ──────────────────────────────────────────────────
+
+
+def render_job_table(
+	items: list[dict],
+	title: str,
+	*,
+	page: int = 1,
+	hint_next: str = "",
+) -> None:
+	"""Render a list of jobs as a rich table."""
+	if not items:
+		console.print("[yellow]no results[/yellow]")
+		return
+
+	table = Table(title=f"{title} ({len(items)} results)", show_lines=True)
+	table.add_column("#", style="dim", width=3)
+	table.add_column("title", style="bold cyan", max_width=30)
+	table.add_column("company", style="green", max_width=20)
+	table.add_column("salary", style="yellow", max_width=12)
+	table.add_column("exp", max_width=10)
+	table.add_column("edu", max_width=8)
+	table.add_column("city", style="blue", max_width=12)
+
+	for i, job in enumerate(items, 1):
+		table.add_row(
+			str(i),
+			job.get("title", job.get("jobName", "-")),
+			job.get("company", job.get("brandName", "-")),
+			job.get("salary", job.get("salaryDesc", "-")),
+			job.get("experience", job.get("jobExperience", "-")),
+			job.get("education", job.get("jobDegree", "-")),
+			job.get("city", job.get("cityName", "-")),
+		)
+
+	console.print(table)
+	console.print("  [dim]use: boss show <#> to view details[/dim]")
+	if hint_next:
+		console.print(f"  [dim]{hint_next}[/dim]")
+
+
+def render_job_detail(data: dict) -> None:
+	"""Render job detail as a rich panel."""
+	title = data.get("title", "-")
+	salary = data.get("salary", "-")
+	exp = data.get("experience", "-")
+	edu = data.get("education", "-")
+	city = data.get("city", "-")
+	company = data.get("company", "-")
+	boss = data.get("boss_name", "-")
+	boss_title = data.get("boss_title", "-")
+	desc = data.get("description", "")
+
+	skills = data.get("skills", [])
+	skill_str = ", ".join(skills) if skills else "-"
+
+	text = (
+		f"[bold cyan]{title}[/bold cyan]  [yellow]{salary}[/yellow]\n"
+		f"exp: {exp} | edu: {edu} | city: {city}\n"
+		f"skills: {skill_str}\n"
+		f"\n"
+		f"[bold green]company:[/bold green] {company}\n"
+		f"\n"
+		f"[bold magenta]boss:[/bold magenta] {boss} ({boss_title})\n"
+	)
+
+	if desc:
+		if len(desc) > 500:
+			desc = desc[:500] + "..."
+		text += f"\n[bold]description:[/bold]\n{desc}"
+
+	panel = Panel(text, title="job detail", border_style="cyan")
+	console.print(panel)
+
+	sid = data.get("security_id", "")
+	jid = data.get("job_id", "")
+	if sid and jid:
+		console.print(f"  [dim]greet: boss greet {sid} {jid}[/dim]")
+
+
+def render_status(data: dict) -> None:
+	"""Render login status."""
+	if data.get("logged_in"):
+		name = data.get("user_name", "unknown")
+		console.print(f"[green]logged in[/green] as [bold]{name}[/bold]")
+	else:
+		console.print("[yellow]not logged in[/yellow] - run: boss login")
+
+
+def render_simple_list(
+	items: list[dict],
+	title: str,
+	columns: list[tuple[str, str, str]],
+) -> None:
+	"""Render a generic list as a rich table.
+
+	columns: list of (header, dict_key, style)
+	"""
+	if not items:
+		console.print(f"[yellow]no {title}[/yellow]")
+		return
+
+	table = Table(title=f"{title} ({len(items)})", show_lines=True)
+	table.add_column("#", style="dim", width=3)
+	for header, _, style in columns:
+		table.add_column(header, style=style, max_width=25)
+
+	for i, item in enumerate(items, 1):
+		row = [str(i)]
+		for _, key, _ in columns:
+			row.append(str(item.get(key, "-")))
+		table.add_row(*row)
+
+	console.print(table)

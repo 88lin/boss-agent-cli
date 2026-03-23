@@ -4,6 +4,7 @@ from boss_agent_cli.api.client import BossClient
 from boss_agent_cli.api.models import JobItem
 from boss_agent_cli.auth.manager import AuthManager, AuthRequired, TokenRefreshFailed
 from boss_agent_cli.cache.store import CacheStore
+from boss_agent_cli.index_cache import save_index
 from boss_agent_cli.output import emit_error, emit_success
 
 
@@ -32,6 +33,8 @@ def recommend_cmd(ctx, page):
 			items.append(item.to_dict())
 
 		cache.close()
+
+		save_index(data_dir, items, source="recommend")
 
 		pagination = {
 			"page": page,

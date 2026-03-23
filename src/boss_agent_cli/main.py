@@ -2,21 +2,23 @@ from pathlib import Path
 
 import click
 
-from boss_agent_cli.commands import schema, login, status, search, detail, greet, recommend, export, cities, me
+from boss_agent_cli.commands import schema, login, logout, status, search, detail, greet, recommend, export, cities, me, chat, interviews, show, history
 from boss_agent_cli.config import load_config
 from boss_agent_cli.output import Logger
 
 
-@click.group()
+@click.group(context_settings={"allow_interspersed_args": False})
 @click.option("--data-dir", default="~/.boss-agent", help="数据存储目录")
 @click.option("--delay", default=None, help="请求间隔范围（秒），如 1.5-3.0")
 @click.option("--log-level", default=None, type=click.Choice(["error", "warning", "info", "debug"]))
+@click.option("--json/--no-json", "json_output", default=False, help="强制 JSON 输出（即使在终端中）")
 @click.pass_context
-def cli(ctx, data_dir, delay, log_level):
+def cli(ctx, data_dir, delay, log_level, json_output):
 	ctx.ensure_object(dict)
 	data_dir = Path(data_dir).expanduser()
 	data_dir.mkdir(parents=True, exist_ok=True)
 	ctx.obj["data_dir"] = data_dir
+	ctx.obj["json_output"] = json_output
 
 	cfg = load_config(data_dir / "config.json")
 
@@ -33,6 +35,7 @@ def cli(ctx, data_dir, delay, log_level):
 
 cli.add_command(schema.schema_cmd, "schema")
 cli.add_command(login.login_cmd, "login")
+cli.add_command(logout.logout_cmd, "logout")
 cli.add_command(status.status_cmd, "status")
 cli.add_command(search.search_cmd, "search")
 cli.add_command(detail.detail_cmd, "detail")
@@ -42,3 +45,7 @@ cli.add_command(recommend.recommend_cmd, "recommend")
 cli.add_command(export.export_cmd, "export")
 cli.add_command(cities.cities_cmd, "cities")
 cli.add_command(me.me_cmd, "me")
+cli.add_command(chat.chat_cmd, "chat")
+cli.add_command(interviews.interviews_cmd, "interviews")
+cli.add_command(show.show_cmd, "show")
+cli.add_command(history.history_cmd, "history")

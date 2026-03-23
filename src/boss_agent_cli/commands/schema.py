@@ -52,11 +52,25 @@ SCHEMA_DATA = {
 					"type": "string",
 					"default": None,
 					"description": "行业类型",
+					"choices": ["不限", "互联网", "电子商务", "游戏", "软件/信息服务", "人工智能", "大数据", "云计算", "区块链", "物联网", "金融", "银行", "保险", "证券/基金", "教育培训", "医疗健康", "房地产", "汽车", "物流/运输", "广告/传媒", "消费品", "制造业", "能源/环保", "政府/非营利", "农业"],
 				},
 				"--scale": {
 					"type": "string",
 					"default": None,
 					"description": "公司规模（如 100-499人）",
+					"choices": ["0-20人", "20-99人", "100-499人", "500-999人", "1000-9999人", "10000人以上"],
+				},
+				"--stage": {
+					"type": "string",
+					"default": None,
+					"description": "融资阶段（如 已上市、A轮）",
+					"choices": ["不限", "未融资", "天使轮", "A轮", "B轮", "C轮", "D轮及以上", "已上市", "不需要融资"],
+				},
+				"--job-type": {
+					"type": "string",
+					"default": None,
+					"description": "职位类型（全职/兼职/实习）",
+					"choices": ["全职", "兼职", "实习"],
 				},
 				"--welfare": {
 					"type": "string",
@@ -119,6 +133,40 @@ SCHEMA_DATA = {
 					"default": None,
 					"description": "薪资范围",
 				},
+				"--experience": {
+					"type": "string",
+					"default": None,
+					"description": "经验要求（如 3-5年）",
+				},
+				"--education": {
+					"type": "string",
+					"default": None,
+					"description": "学历要求（如 本科）",
+				},
+				"--industry": {
+					"type": "string",
+					"default": None,
+					"description": "行业类型",
+					"choices": ["不限", "互联网", "电子商务", "游戏", "软件/信息服务", "人工智能", "大数据", "云计算", "区块链", "物联网", "金融", "银行", "保险", "证券/基金", "教育培训", "医疗健康", "房地产", "汽车", "物流/运输", "广告/传媒", "消费品", "制造业", "能源/环保", "政府/非营利", "农业"],
+				},
+				"--scale": {
+					"type": "string",
+					"default": None,
+					"description": "公司规模（如 100-499人）",
+					"choices": ["0-20人", "20-99人", "100-499人", "500-999人", "1000-9999人", "10000人以上"],
+				},
+				"--stage": {
+					"type": "string",
+					"default": None,
+					"description": "融资阶段（如 已上市、A轮）",
+					"choices": ["不限", "未融资", "天使轮", "A轮", "B轮", "C轮", "D轮及以上", "已上市", "不需要融资"],
+				},
+				"--job-type": {
+					"type": "string",
+					"default": None,
+					"description": "职位类型（全职/兼职/实习）",
+					"choices": ["全职", "兼职", "实习"],
+				},
 				"--count": {
 					"type": "int",
 					"default": 10,
@@ -173,6 +221,35 @@ SCHEMA_DATA = {
 				},
 			},
 		},
+		"show": {
+			"description": "按编号查看搜索/推荐结果中的职位详情（先 search/recommend 后使用）",
+			"args": [
+				{"name": "index", "required": True, "description": "搜索结果编号（1-based）"},
+			],
+			"options": {},
+		},
+		"history": {
+			"description": "查看最近浏览过的职位",
+			"args": [],
+			"options": {
+				"--page": {"type": "int", "default": 1, "description": "页码"},
+			},
+		},
+		"chat": {
+			"description": "查看沟通列表（已打招呼的 Boss）",
+			"args": [],
+			"options": {},
+		},
+		"interviews": {
+			"description": "查看面试邀请列表",
+			"args": [],
+			"options": {},
+		},
+		"logout": {
+			"description": "退出登录，清除本地保存的登录态",
+			"args": [],
+			"options": {},
+		},
 	},
 	"global_options": {
 		"--data-dir": {
@@ -190,6 +267,11 @@ SCHEMA_DATA = {
 			"default": "error",
 			"choices": ["error", "warning", "info", "debug"],
 			"description": "日志级别",
+		},
+		"--json": {
+			"type": "bool",
+			"default": False,
+			"description": "强制 JSON 输出（即使在终端中，默认管道模式自动 JSON）",
 		},
 	},
 	"error_codes": {

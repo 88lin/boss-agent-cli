@@ -4,6 +4,12 @@ import time
 import click
 
 from boss_agent_cli.api.client import BossClient
+from boss_agent_cli.api.endpoints import (
+	INDUSTRY_CODES,
+	JOB_TYPE_CODES,
+	SCALE_CODES,
+	STAGE_CODES,
+)
 from boss_agent_cli.api.models import JobItem
 from boss_agent_cli.auth.manager import AuthManager, AuthRequired, TokenRefreshFailed
 from boss_agent_cli.cache.store import CacheStore
@@ -85,10 +91,16 @@ def greet_cmd(ctx, security_id, job_id, message):
 @click.argument("query")
 @click.option("--city", default=None, help="城市名称")
 @click.option("--salary", default=None, help="薪资范围")
+@click.option("--experience", default=None, help="经验要求（如 3-5年）")
+@click.option("--education", default=None, help="学历要求（如 本科）")
+@click.option("--industry", default=None, type=click.Choice(list(INDUSTRY_CODES.keys()), case_sensitive=False), help="行业类型")
+@click.option("--scale", default=None, type=click.Choice(list(SCALE_CODES.keys()), case_sensitive=False), help="公司规模（如 100-499人）")
+@click.option("--stage", default=None, type=click.Choice(list(STAGE_CODES.keys()), case_sensitive=False), help="融资阶段（如 已上市、A轮）")
+@click.option("--job-type", default=None, type=click.Choice(list(JOB_TYPE_CODES.keys()), case_sensitive=False), help="职位类型（全职/兼职/实习）")
 @click.option("--count", default=10, help="打招呼数量上限（最大 10）")
 @click.option("--dry-run", is_flag=True, default=False, help="仅模拟执行，不实际打招呼")
 @click.pass_context
-def batch_greet_cmd(ctx, query, city, salary, count, dry_run):
+def batch_greet_cmd(ctx, query, city, salary, experience, education, industry, scale, stage, job_type, count, dry_run):
 	"""搜索后批量打招呼（上限 10）"""
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
@@ -102,7 +114,11 @@ def batch_greet_cmd(ctx, query, city, salary, count, dry_run):
 		auth = AuthManager(data_dir, logger=logger)
 		client = BossClient(auth, delay=delay)
 
-		raw = client.search_jobs(query, city=city, salary=salary)
+		raw = client.search_jobs(
+			query, city=city, salary=salary, experience=experience,
+			education=education, industry=industry, scale=scale,
+			stage=stage, job_type=job_type,
+		)
 		zp_data = raw.get("zpData", {})
 		job_list = zp_data.get("jobList", [])
 

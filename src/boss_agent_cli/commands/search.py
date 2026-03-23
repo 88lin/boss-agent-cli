@@ -3,11 +3,19 @@ import json
 import click
 
 from boss_agent_cli.api.client import BossClient
-from boss_agent_cli.api.endpoints import CITY_CODES
+from boss_agent_cli.api.endpoints import (
+	CITY_CODES,
+	INDUSTRY_CODES,
+	JOB_TYPE_CODES,
+	SCALE_CODES,
+	STAGE_CODES,
+)
 from boss_agent_cli.api.models import JobItem
 from boss_agent_cli.auth.manager import AuthManager, AuthRequired, TokenRefreshFailed
 from boss_agent_cli.cache.store import CacheStore
-from boss_agent_cli.output import emit_error, emit_success
+from boss_agent_cli.display import handle_error_output, handle_output, render_job_table
+from boss_agent_cli.index_cache import save_index
+from boss_agent_cli.output import emit_success
 
 # 福利关键词分组：用户输入 -> 在 welfareList 和 postDescription 中匹配的关键词
 _WELFARE_KEYWORDS = {
@@ -64,21 +72,23 @@ def _match_all_welfare(
 @click.option("--salary", default=None, help="薪资范围（如 10-20K）")
 @click.option("--experience", default=None, help="经验要求（如 3-5年）")
 @click.option("--education", default=None, help="学历要求（如 本科）")
-@click.option("--industry", default=None, help="行业类型")
-@click.option("--scale", default=None, help="公司规模（如 100-499人）")
+@click.option("--industry", default=None, type=click.Choice(list(INDUSTRY_CODES.keys()), case_sensitive=False), help="行业类型")
+@click.option("--scale", default=None, type=click.Choice(list(SCALE_CODES.keys()), case_sensitive=False), help="公司规模（如 100-499人）")
+@click.option("--stage", default=None, type=click.Choice(list(STAGE_CODES.keys()), case_sensitive=False), help="融资阶段（如 已上市、A轮）")
+@click.option("--job-type", default=None, type=click.Choice(list(JOB_TYPE_CODES.keys()), case_sensitive=False), help="职位类型（全职/兼职/实习）")
 @click.option("--welfare", default=None, help="福利筛选（如 双休、五险一金），会逐个检查职位详情")
 @click.option("--page", default=1, help="页码")
 @click.option("--no-cache", is_flag=True, default=False, help="跳过缓存")
 @click.pass_context
-def search_cmd(ctx, query, city, salary, experience, education, industry, scale, welfare, page, no_cache):
+def search_cmd(ctx, query, city, salary, experience, education, industry, scale, stage, job_type, welfare, page, no_cache):
 	"""按关键词和筛选条件搜索职位列表"""
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 	delay = ctx.obj["delay"]
 
 	if city and city not in CITY_CODES:
-		emit_error(
-			"search",
+		handle_error_output(
+			ctx, "search",
 			code="INVALID_PARAM",
 			message=f"未知城市: {city}，请使用 CITY_CODES 中的城市名",
 		)
@@ -97,7 +107,8 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 		search_params = {
 			"query": query, "city": city, "salary": salary,
 			"experience": experience, "education": education,
-			"industry": industry, "scale": scale, "page": page,
+			"industry": industry, "scale": scale, "stage": stage,
+			"job_type": job_type, "page": page,
 		}
 		cached = cache.get_search(search_params)
 		if cached is not None:
@@ -118,8 +129,10 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 				welfare_conditions=welfare_conditions,
 				city=city, salary=salary, experience=experience,
 				education=education, industry=industry, scale=scale,
+				stage=stage, job_type=job_type,
 				start_page=page,
 			)
+			save_index(data_dir, items, source=f"search:{query}")
 			pagination = {"page": 1, "has_more": False, "total": len(items)}
 			hints = {
 				"next_actions": [
@@ -127,12 +140,17 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 					"使用 boss greet <security_id> <job_id> 打招呼",
 				],
 			}
-			emit_success("search", items, pagination=pagination, hints=hints)
+			handle_output(
+				ctx, "search", items,
+				render=lambda data: render_job_table(data, f"search: {query} (welfare filter)"),
+				pagination=pagination, hints=hints,
+			)
 		else:
 			# 普通搜索模式
 			raw = client.search_jobs(
 				query, city=city, salary=salary, experience=experience,
-				education=education, industry=industry, scale=scale, page=page,
+				education=education, industry=industry, scale=scale,
+				stage=stage, job_type=job_type, page=page,
 			)
 			zp_data = raw.get("zpData", {})
 			job_list = zp_data.get("jobList", [])
@@ -141,6 +159,8 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 				item = JobItem.from_api(raw_item)
 				item.greeted = cache.is_greeted(item.security_id)
 				items.append(item.to_dict())
+
+			save_index(data_dir, items, source=f"search:{query}")
 
 			pagination = {
 				"page": page,
@@ -157,26 +177,35 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 			search_params = {
 				"query": query, "city": city, "salary": salary,
 				"experience": experience, "education": education,
-				"industry": industry, "scale": scale, "page": page,
+				"industry": industry, "scale": scale, "stage": stage,
+				"job_type": job_type, "page": page,
 			}
 			cache_data = {"data": items, "pagination": pagination, "hints": hints}
 			cache.put_search(search_params, json.dumps(cache_data, ensure_ascii=False))
-			emit_success("search", items, pagination=pagination, hints=hints)
+			handle_output(
+				ctx, "search", items,
+				render=lambda data: render_job_table(
+					data, f"search: {query}",
+					page=page,
+					hint_next=f"more: boss search \"{query}\" --page {page + 1}" if zp_data.get("hasMore") else "",
+				),
+				pagination=pagination, hints=hints,
+			)
 	except AuthRequired:
-		emit_error(
-			"search", code="AUTH_REQUIRED",
+		handle_error_output(
+			ctx, "search", code="AUTH_REQUIRED",
 			message="未登录，请先执行 boss login",
 			recoverable=True, recovery_action="boss login",
 		)
 	except TokenRefreshFailed:
-		emit_error(
-			"search", code="TOKEN_REFRESH_FAILED",
+		handle_error_output(
+			ctx, "search", code="TOKEN_REFRESH_FAILED",
 			message="Token 刷新失败，请重新登录",
 			recoverable=True, recovery_action="boss login",
 		)
 	except Exception as e:
-		emit_error(
-			"search", code="NETWORK_ERROR",
+		handle_error_output(
+			ctx, "search", code="NETWORK_ERROR",
 			message=f"搜索失败: {e}",
 			recoverable=True, recovery_action="重试",
 		)
@@ -193,6 +222,7 @@ def _search_with_welfare_filter(
 	welfare_conditions: list[tuple[str, list[str]]],
 	city=None, salary=None, experience=None,
 	education=None, industry=None, scale=None,
+	stage=None, job_type=None,
 	start_page: int = 1,
 ) -> list[dict]:
 	"""逐页搜索，对每个职位检查所有福利条件是否同时满足（AND 逻辑）"""
@@ -206,6 +236,7 @@ def _search_with_welfare_filter(
 		raw = client.search_jobs(
 			query, city=city, salary=salary, experience=experience,
 			education=education, industry=industry, scale=scale,
+			stage=stage, job_type=job_type,
 			page=current_page,
 		)
 		zp_data = raw.get("zpData", {})
