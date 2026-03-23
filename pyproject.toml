@@ -4,11 +4,27 @@ build-backend = "hatchling.build"
 
 [project]
 name = "boss-agent-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI Agent 专用的 BOSS 直聘求职 CLI 工具"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
+authors = [
+	{name = "can4hou6joeng4"},
+]
+keywords = ["boss-zhipin", "job-search", "ai-agent", "cli", "recruitment", "boss直聘"]
+classifiers = [
+	"Development Status :: 4 - Beta",
+	"Environment :: Console",
+	"Intended Audience :: Developers",
+	"License :: OSI Approved :: MIT License",
+	"Programming Language :: Python :: 3",
+	"Programming Language :: Python :: 3.10",
+	"Programming Language :: Python :: 3.11",
+	"Programming Language :: Python :: 3.12",
+	"Topic :: Office/Business",
+	"Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
 	"click>=8.0",
 	"httpx>=0.27",
@@ -16,6 +32,11 @@ dependencies = [
 	"patchright>=1.58.2",
 	"browser-cookie3>=0.16.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/can4hou6joeng4/boss-agent-cli"
+Repository = "https://github.com/can4hou6joeng4/boss-agent-cli"
+Issues = "https://github.com/can4hou6joeng4/boss-agent-cli/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
