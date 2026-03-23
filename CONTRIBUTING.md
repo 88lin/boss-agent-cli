@@ -31,4 +31,7 @@ uv run pytest tests/ -v
 2. 在 `main.py` 中注册命令
 3. 在 `schema.py` 中添加命令描述
 4. 在 `tests/test_commands.py` 中添加测试
-5. 更新 `skills/SKILL.md`
+5. 更新 `skills/boss-agent-cli/SKILL.md`（命令速查表）
+6. 更新 `AGENTS.md`（CLI 不变量契约中的命令数）
+7. 更新 `README.md`（命令参考表）
+8. 更新对应模块的 `CLAUDE.md`
