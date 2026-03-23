@@ -6,5 +6,6 @@ dist/
 build/
 .pytest_cache/
 .playwright-mcp/
-.claude/plan/
+.claude/
+docs/superpowers/
 my-boss-profile.md

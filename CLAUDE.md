@@ -48,11 +48,6 @@ graph TD
     B --> G["output.py"];
     B --> H["config.py"];
     B --> I["main.py"];
-
-    click C "./src/boss_agent_cli/auth/CLAUDE.md" "查看 auth 模块文档"
-    click D "./src/boss_agent_cli/api/CLAUDE.md" "查看 api 模块文档"
-    click E "./src/boss_agent_cli/cache/CLAUDE.md" "查看 cache 模块文档"
-    click F "./src/boss_agent_cli/commands/CLAUDE.md" "查看 commands 模块文档"
 ```
 
 ## 模块索引
