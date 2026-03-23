@@ -64,9 +64,10 @@ patchright install chromium
 
 | 命令 | 用途 | 关键参数 |
 |------|------|----------|
-| `boss schema` | 能力自描述（9 个业务命令） | 无 |
+| `boss schema` | 能力自描述（10 个业务命令） | 无 |
 | `boss status` | 检查登录态 | 无 |
 | `boss login` | 登录（Cookie 优先，失败扫码） | `--timeout` `--cookie-source` |
+| `boss me` | 我的信息（用户/简历/期望/投递） | `--section` `--deliver-page` |
 | `boss search <query>` | 搜索职位 | `--city` `--salary` `--welfare` `--experience` |
 | `boss recommend` | 个性化推荐 | `--page` |
 | `boss detail <security_id>` | 职位详情 | 无 |

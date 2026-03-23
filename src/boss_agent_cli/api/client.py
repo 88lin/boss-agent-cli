@@ -121,6 +121,16 @@ class BossClient:
 	def user_info(self) -> dict:
 		return self._request("GET", endpoints.USER_INFO_URL)
 
+	def resume_baseinfo(self) -> dict:
+		return self._request("GET", endpoints.RESUME_BASEINFO_URL)
+
+	def resume_expect(self) -> dict:
+		return self._request("GET", endpoints.RESUME_EXPECT_URL)
+
+	def deliver_list(self, page: int = 1) -> dict:
+		params = {"page": page}
+		return self._request("GET", endpoints.DELIVER_LIST_URL, params=params)
+
 	def recommend_jobs(self, page: int = 1) -> dict:
 		params = {"page": page}
 		return self._request("GET", endpoints.RECOMMEND_URL, params=params)

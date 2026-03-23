@@ -2,7 +2,7 @@ from pathlib import Path
 
 import click
 
-from boss_agent_cli.commands import schema, login, status, search, detail, greet, recommend, export, cities
+from boss_agent_cli.commands import schema, login, status, search, detail, greet, recommend, export, cities, me
 from boss_agent_cli.config import load_config
 from boss_agent_cli.output import Logger
 
@@ -41,3 +41,4 @@ cli.add_command(greet.batch_greet_cmd, "batch-greet")
 cli.add_command(recommend.recommend_cmd, "recommend")
 cli.add_command(export.export_cmd, "export")
 cli.add_command(cities.cities_cmd, "cities")
+cli.add_command(me.me_cmd, "me")

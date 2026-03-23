@@ -156,6 +156,23 @@ SCHEMA_DATA = {
 			"args": [],
 			"options": {},
 		},
+		"me": {
+			"description": "获取当前登录用户的个人信息（基本信息、简历、求职期望、投递记录）",
+			"args": [],
+			"options": {
+				"--section": {
+					"type": "string",
+					"default": None,
+					"choices": ["user", "resume", "expect", "deliver"],
+					"description": "只获取指定部分（不指定则获取全部）",
+				},
+				"--deliver-page": {
+					"type": "int",
+					"default": 1,
+					"description": "投递记录页码",
+				},
+			},
+		},
 	},
 	"global_options": {
 		"--data-dir": {

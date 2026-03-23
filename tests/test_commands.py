@@ -110,7 +110,8 @@ def test_schema_includes_new_commands():
 	assert "recommend" in commands
 	assert "export" in commands
 	assert "cities" in commands
-	assert len(commands) == 9
+	assert "me" in commands
+	assert len(commands) == 10
 
 
 @patch("boss_agent_cli.commands.recommend.CacheStore")

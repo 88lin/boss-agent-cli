@@ -6,6 +6,9 @@ DETAIL_URL = f"{BASE_URL}/wapi/zpgeek/job/detail.json"
 GREET_URL = f"{BASE_URL}/wapi/zpgeek/friend/add.json"
 JOB_CARD_URL = f"{BASE_URL}/wapi/zpgeek/job/card.json"
 USER_INFO_URL = f"{BASE_URL}/wapi/zpuser/wap/getUserInfo.json"
+RESUME_BASEINFO_URL = f"{BASE_URL}/wapi/zpgeek/resume/baseinfo/query.json"
+RESUME_EXPECT_URL = f"{BASE_URL}/wapi/zpgeek/resume/expect/query.json"
+DELIVER_LIST_URL = f"{BASE_URL}/wapi/zprelation/resume/geekDeliverList"
 
 CITY_CODES = {
 	"北京": "101010100", "上海": "101020100", "广州": "101280100",
