@@ -63,7 +63,7 @@ class BrowserSession:
 
 		Attempts in order:
 		  1. Explicit cdp_url if provided
-		  2. Default http://localhost:9222
+		  2. Default http://localhost:9222 (+ auto WS fallback)
 		  3. WebSocket URL from Chrome's DevToolsActivePort file
 		"""
 		urls_to_try = []
@@ -77,29 +77,49 @@ class BrowserSession:
 			urls_to_try.append(ws_url)
 
 		for url in urls_to_try:
-			try:
-				self._browser = self._pw.chromium.connect_over_cdp(url)
-				contexts = self._browser.contexts
-				if contexts:
-					self._context = contexts[0]
-				else:
-					self._context = self._browser.new_context()
-				self._page = self._context.new_page()
-				self._page.goto(HOME_URL, wait_until="domcontentloaded")
-				self._page.wait_for_load_state("networkidle")
-				self._started = True
-				self._is_cdp = True
-				print(f"[boss] CDP 连接成功 ({url})，使用用户 Chrome", file=sys.stderr)
+			if self._try_connect(url):
 				return True
-			except Exception:
-				if self._browser:
-					try:
-						self._browser.close()
-					except Exception:
-						pass
-					self._browser = None
-				continue
+			# HTTP URL 连接失败时，尝试从 /json/version 获取 WS URL
+			if url.startswith("http"):
+				ws = self._fetch_ws_url(url)
+				if ws and self._try_connect(ws):
+					return True
 		return False
+
+	def _try_connect(self, url: str) -> bool:
+		"""Attempt a single CDP connection."""
+		try:
+			self._browser = self._pw.chromium.connect_over_cdp(url)
+			contexts = self._browser.contexts
+			if contexts:
+				self._context = contexts[0]
+			else:
+				self._context = self._browser.new_context()
+			self._page = self._context.new_page()
+			self._page.goto(HOME_URL, wait_until="domcontentloaded")
+			self._page.wait_for_load_state("networkidle")
+			self._started = True
+			self._is_cdp = True
+			print(f"[boss] CDP 连接成功 ({url})，使用用户 Chrome", file=sys.stderr)
+			return True
+		except Exception:
+			if self._browser:
+				try:
+					self._browser.close()
+				except Exception:
+					pass
+				self._browser = None
+			return False
+
+	@staticmethod
+	def _fetch_ws_url(http_url: str) -> str | None:
+		"""Fetch WebSocket debugger URL from Chrome's /json/version endpoint."""
+		import httpx
+		try:
+			resp = httpx.get(f"{http_url}/json/version", timeout=3)
+			return resp.json().get("webSocketDebuggerUrl")
+		except Exception:
+			return None
 
 	@staticmethod
 	def _read_devtools_active_port() -> str | None:
