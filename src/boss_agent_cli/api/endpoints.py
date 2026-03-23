@@ -1,5 +1,13 @@
 BASE_URL = "https://www.zhipin.com"
 
+# ── Web page URLs (for dynamic Referer) ──────────────────────────────
+WEB_GEEK_BASE = f"{BASE_URL}/web/geek"
+WEB_GEEK_JOB_URL = f"{WEB_GEEK_BASE}/job"
+WEB_GEEK_RECOMMEND_URL = f"{WEB_GEEK_BASE}/recommend"
+WEB_GEEK_CHAT_URL = f"{WEB_GEEK_BASE}/chat"
+WEB_GEEK_RESUME_URL = f"{WEB_GEEK_BASE}/resume"
+
+# ── API endpoints ────────────────────────────────────────────────────
 SEARCH_URL = f"{BASE_URL}/wapi/zpgeek/search/joblist.json"
 RECOMMEND_URL = f"{BASE_URL}/wapi/zpgeek/pc/recommend/job/list.json"
 DETAIL_URL = f"{BASE_URL}/wapi/zpgeek/job/detail.json"
@@ -9,6 +17,39 @@ USER_INFO_URL = f"{BASE_URL}/wapi/zpuser/wap/getUserInfo.json"
 RESUME_BASEINFO_URL = f"{BASE_URL}/wapi/zpgeek/resume/baseinfo/query.json"
 RESUME_EXPECT_URL = f"{BASE_URL}/wapi/zpgeek/resume/expect/query.json"
 DELIVER_LIST_URL = f"{BASE_URL}/wapi/zprelation/resume/geekDeliverList"
+
+# ── Browser-like headers ─────────────────────────────────────────────
+DEFAULT_HEADERS = {
+	"User-Agent": (
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+		"AppleWebKit/537.36 (KHTML, like Gecko) "
+		"Chrome/145.0.0.0 Safari/537.36"
+	),
+	"sec-ch-ua": '"Chromium";v="145", "Not(A:Brand";v="99", "Google Chrome";v="145"',
+	"sec-ch-ua-mobile": "?0",
+	"sec-ch-ua-platform": '"macOS"',
+	"Sec-Fetch-Dest": "empty",
+	"Sec-Fetch-Mode": "cors",
+	"Sec-Fetch-Site": "same-origin",
+	"Accept": "application/json, text/plain, */*",
+	"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+	"DNT": "1",
+	"Origin": BASE_URL,
+	"Referer": f"{BASE_URL}/",
+}
+
+# ── Endpoint → Referer mapping ───────────────────────────────────────
+REFERER_MAP = {
+	SEARCH_URL: WEB_GEEK_JOB_URL,
+	JOB_CARD_URL: WEB_GEEK_JOB_URL,
+	DETAIL_URL: WEB_GEEK_JOB_URL,
+	GREET_URL: WEB_GEEK_CHAT_URL,
+	RECOMMEND_URL: WEB_GEEK_RECOMMEND_URL,
+	USER_INFO_URL: f"{BASE_URL}/",
+	RESUME_BASEINFO_URL: WEB_GEEK_RESUME_URL,
+	RESUME_EXPECT_URL: WEB_GEEK_RESUME_URL,
+	DELIVER_LIST_URL: WEB_GEEK_CHAT_URL,
+}
 
 CITY_CODES = {
 	"北京": "101010100", "上海": "101020100", "广州": "101280100",
