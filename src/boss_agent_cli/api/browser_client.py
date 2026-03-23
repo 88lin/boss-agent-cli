@@ -10,6 +10,7 @@ Supports two modes:
 import random
 import sys
 import time
+from pathlib import Path
 
 from patchright.sync_api import sync_playwright
 
@@ -18,6 +19,13 @@ from boss_agent_cli.api.throttle import RequestThrottle
 
 HOME_URL = "https://www.zhipin.com/"
 CDP_DEFAULT_URL = "http://localhost:9222"
+
+# macOS / Linux / Windows Chrome user data 默认路径
+_CHROME_USER_DATA_CANDIDATES = [
+	Path.home() / "Library/Application Support/Google/Chrome",              # macOS
+	Path.home() / ".config/google-chrome",                                  # Linux
+	Path.home() / "AppData/Local/Google/Chrome/User Data",                  # Windows
+]
 
 
 class BrowserSession:
@@ -51,33 +59,63 @@ class BrowserSession:
 		self._start_headless()
 
 	def _try_cdp(self) -> bool:
-		"""Try connecting to user's Chrome via CDP."""
-		cdp_url = self._cdp_url or CDP_DEFAULT_URL
-		try:
-			self._browser = self._pw.chromium.connect_over_cdp(cdp_url)
-			# CDP 模式下用默认上下文（即用户的浏览器上下文，带完整登录态）
-			contexts = self._browser.contexts
-			if contexts:
-				self._context = contexts[0]
-			else:
-				self._context = self._browser.new_context()
-			# 创建新 tab，不干扰用户现有标签页
-			self._page = self._context.new_page()
-			self._page.goto(HOME_URL, wait_until="domcontentloaded")
-			self._page.wait_for_load_state("networkidle")
-			self._started = True
-			self._is_cdp = True
-			print("[boss] CDP 连接成功，使用用户 Chrome（真实指纹）", file=sys.stderr)
-			return True
-		except Exception:
-			# CDP 不可用，清理并返回 False
-			if self._browser:
+		"""Try connecting to user's Chrome via CDP.
+
+		Attempts in order:
+		  1. Explicit cdp_url if provided
+		  2. Default http://localhost:9222
+		  3. WebSocket URL from Chrome's DevToolsActivePort file
+		"""
+		urls_to_try = []
+		if self._cdp_url:
+			urls_to_try.append(self._cdp_url)
+		urls_to_try.append(CDP_DEFAULT_URL)
+
+		# 从 DevToolsActivePort 文件读取 WebSocket URL
+		ws_url = self._read_devtools_active_port()
+		if ws_url:
+			urls_to_try.append(ws_url)
+
+		for url in urls_to_try:
+			try:
+				self._browser = self._pw.chromium.connect_over_cdp(url)
+				contexts = self._browser.contexts
+				if contexts:
+					self._context = contexts[0]
+				else:
+					self._context = self._browser.new_context()
+				self._page = self._context.new_page()
+				self._page.goto(HOME_URL, wait_until="domcontentloaded")
+				self._page.wait_for_load_state("networkidle")
+				self._started = True
+				self._is_cdp = True
+				print(f"[boss] CDP 连接成功 ({url})，使用用户 Chrome", file=sys.stderr)
+				return True
+			except Exception:
+				if self._browser:
+					try:
+						self._browser.close()
+					except Exception:
+						pass
+					self._browser = None
+				continue
+		return False
+
+	@staticmethod
+	def _read_devtools_active_port() -> str | None:
+		"""Read Chrome's DevToolsActivePort file to get WS endpoint."""
+		for user_data_dir in _CHROME_USER_DATA_CANDIDATES:
+			port_file = user_data_dir / "DevToolsActivePort"
+			if port_file.exists():
 				try:
-					self._browser.close()
+					lines = port_file.read_text().strip().splitlines()
+					if len(lines) >= 2:
+						port = lines[0].strip()
+						ws_path = lines[1].strip()
+						return f"ws://127.0.0.1:{port}{ws_path}"
 				except Exception:
-					pass
-				self._browser = None
-			return False
+					continue
+		return None
 
 	def _start_headless(self):
 		"""Fallback: launch headless patchright Chromium."""
@@ -97,7 +135,7 @@ class BrowserSession:
 		self._page.wait_for_load_state("networkidle")
 		self._started = True
 		self._is_cdp = False
-		print("[boss] CDP 不可用，降级到 headless patchright", file=sys.stderr)
+		print("[boss] CDP 不可用（提示：需以 --remote-debugging-port=9222 启动 Chrome），降级到 headless patchright", file=sys.stderr)
 
 	# ── Core request via browser fetch() ─────────────────────────────
 
