@@ -9,6 +9,7 @@ DEFAULTS = {
 	"batch_greet_max": 10,
 	"log_level": "error",
 	"login_timeout": 120,
+	"cdp_url": None,
 }
 
 

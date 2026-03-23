@@ -199,3 +199,20 @@ class BossClient:
 	def job_history(self, page: int = 1) -> dict:
 		params = {"page": page}
 		return self._request("GET", endpoints.JOB_HISTORY_URL, params=params)
+
+	# ── Lifecycle ────────────────────────────────────────────────────
+
+	def close(self):
+		"""Release httpx client and browser session."""
+		if self._browser_session:
+			self._browser_session.close()
+			self._browser_session = None
+		if self._client:
+			self._client.close()
+			self._client = None
+
+	def __enter__(self):
+		return self
+
+	def __exit__(self, *args):
+		self.close()

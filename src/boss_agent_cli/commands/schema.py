@@ -15,6 +15,11 @@ SCHEMA_DATA = {
 					"default": 120,
 					"description": "登录超时时间（秒）",
 				},
+				"--cdp": {
+					"type": "bool",
+					"default": False,
+					"description": "在 CDP Chrome 中打开登录页扫码（需先用 boss-chrome 启动 Chrome）",
+				},
 			},
 		},
 		"status": {
@@ -267,6 +272,11 @@ SCHEMA_DATA = {
 			"default": "error",
 			"choices": ["error", "warning", "info", "debug"],
 			"description": "日志级别",
+		},
+		"--cdp-url": {
+			"type": "string",
+			"default": None,
+			"description": "Chrome CDP 调试地址（如 http://localhost:9222），启用后优先用用户 Chrome 发请求",
 		},
 		"--json": {
 			"type": "bool",
