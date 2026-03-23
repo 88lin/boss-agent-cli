@@ -219,8 +219,9 @@ class BossClient:
 		params = {"page": page}
 		return self._request("GET", endpoints.DELIVER_LIST_URL, params=params)
 
-	def friend_list(self) -> dict:
-		return self._request("GET", endpoints.FRIEND_LIST_URL)
+	def friend_list(self, page: int = 1) -> dict:
+		params = {"page": page}
+		return self._request("GET", endpoints.FRIEND_LIST_URL, params=params)
 
 	def interview_data(self) -> dict:
 		return self._request("GET", endpoints.INTERVIEW_DATA_URL)
