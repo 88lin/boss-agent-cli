@@ -14,13 +14,13 @@ class AuthError(Exception):
 
 
 class BossClient:
-	"""API client with anti-detection: burst penalty, dynamic Referer, cookie merge."""
+	"""Hybrid API client: browser channel for high-risk ops, httpx for low-risk ops."""
 
 	def __init__(self, auth_manager, *, delay: tuple[float, float] = (1.5, 3.0)):
 		self._auth = auth_manager
 		self._delay = delay
-		self._base_delay = sum(delay) / 2
 		self._client: httpx.Client | None = None
+		self._browser_session = None
 		self._last_request_time = 0.0
 		self._recent_times: deque[float] = deque(maxlen=12)
 
@@ -39,7 +39,18 @@ class BossClient:
 			)
 		return self._client
 
-	# ── Anti-detection delays ────────────────────────────────────────
+	def _get_browser(self):
+		if self._browser_session is None:
+			from boss_agent_cli.api.browser_client import BrowserSession
+			token = self._auth.get_token()
+			self._browser_session = BrowserSession(
+				cookies=token.get("cookies", {}),
+				user_agent=token.get("user_agent", ""),
+				delay=self._delay,
+			)
+		return self._browser_session
+
+	# ── Anti-detection delays (httpx channel) ────────────────────────
 
 	def _wait(self):
 		elapsed = time.time() - self._last_request_time
@@ -47,14 +58,11 @@ class BossClient:
 		std = (self._delay[1] - self._delay[0]) / 4
 		base_sleep = max(0, random.gauss(mean, std) - elapsed)
 
-		# 5% chance of a long pause to mimic reading behavior
 		if random.random() < 0.05:
 			base_sleep += random.uniform(2.0, 5.0)
 
-		# Burst penalty: too many requests in short window
 		burst = self._burst_penalty()
 		total = max(0, base_sleep + burst)
-
 		if total > 0:
 			time.sleep(total)
 
@@ -75,20 +83,16 @@ class BossClient:
 		self._last_request_time = now
 		self._recent_times.append(now)
 
-	# ── Headers ──────────────────────────────────────────────────────
-
 	def _headers_for(self, url: str) -> dict[str, str]:
 		referer = endpoints.REFERER_MAP.get(url, f"{endpoints.BASE_URL}/")
 		return {"Referer": referer}
-
-	# ── Cookie merge ─────────────────────────────────────────────────
 
 	def _merge_cookies(self, resp: httpx.Response):
 		for name, value in resp.cookies.items():
 			if value:
 				self._get_client().cookies.set(name, value)
 
-	# ── Core request ─────────────────────────────────────────────────
+	# ── httpx request (low-risk ops) ─────────────────────────────────
 
 	def _request(self, method: str, url: str, *, _retry_count: int = 0, **kwargs) -> dict:
 		client = self._get_client()
@@ -118,10 +122,8 @@ class BossClient:
 
 		resp.raise_for_status()
 		data = resp.json()
-
 		code = data.get("code")
 
-		# code=37: stoken expired
 		if code == 37 and _retry_count < _MAX_RETRIES:
 			backoff = (2 ** _retry_count) + random.uniform(0.5, 1.5)
 			time.sleep(backoff)
@@ -129,7 +131,6 @@ class BossClient:
 			self._client = None
 			return self._request(method, url, _retry_count=_retry_count + 1, **kwargs)
 
-		# code=9: rate limited — exponential cooldown
 		if code == 9 and _retry_count < _MAX_RETRIES:
 			cooldown = min(60, 10 * (2 ** _retry_count))
 			time.sleep(cooldown)
@@ -137,7 +138,14 @@ class BossClient:
 
 		return data
 
+	# ── Browser request (high-risk ops) ──────────────────────────────
+
+	def _browser_request(self, method: str, url: str, *, params: dict | None = None, data: dict | None = None) -> dict:
+		return self._get_browser().request(method, url, params=params, data=data)
+
 	# ── Public API ───────────────────────────────────────────────────
+	# High-risk: search, recommend, greet, job_card → browser channel
+	# Low-risk: status, me, cities, schema, detail → httpx channel
 
 	def search_jobs(self, query: str, **filters) -> dict:
 		params = {"query": query, "page": filters.get("page", 1)}
@@ -164,15 +172,11 @@ class BossClient:
 				params["scale"] = code
 		if industry := filters.get("industry"):
 			params["industry"] = industry
-		return self._request("GET", endpoints.SEARCH_URL, params=params)
+		return self._browser_request("GET", endpoints.SEARCH_URL, params=params)
 
-	def job_detail(self, job_id: str) -> dict:
-		params = {"encryptJobId": job_id}
-		return self._request("GET", endpoints.DETAIL_URL, params=params)
-
-	def job_card(self, security_id: str, lid: str = "") -> dict:
-		params = {"securityId": security_id, "lid": lid}
-		return self._request("GET", endpoints.JOB_CARD_URL, params=params)
+	def recommend_jobs(self, page: int = 1) -> dict:
+		params = {"page": page}
+		return self._browser_request("GET", endpoints.RECOMMEND_URL, params=params)
 
 	def greet(self, security_id: str, job_id: str, message: str = "") -> dict:
 		data = {
@@ -180,7 +184,17 @@ class BossClient:
 			"jobId": job_id,
 			"greeting": message or "您好，我对该岗位很感兴趣，希望能和您聊一聊。",
 		}
-		return self._request("POST", endpoints.GREET_URL, data=data)
+		return self._browser_request("POST", endpoints.GREET_URL, data=data)
+
+	def job_card(self, security_id: str, lid: str = "") -> dict:
+		params = {"securityId": security_id, "lid": lid}
+		return self._browser_request("GET", endpoints.JOB_CARD_URL, params=params)
+
+	# ── Low-risk: httpx channel ──────────────────────────────────────
+
+	def job_detail(self, job_id: str) -> dict:
+		params = {"encryptJobId": job_id}
+		return self._request("GET", endpoints.DETAIL_URL, params=params)
 
 	def user_info(self) -> dict:
 		return self._request("GET", endpoints.USER_INFO_URL)
@@ -194,7 +208,3 @@ class BossClient:
 	def deliver_list(self, page: int = 1) -> dict:
 		params = {"page": page}
 		return self._request("GET", endpoints.DELIVER_LIST_URL, params=params)
-
-	def recommend_jobs(self, page: int = 1) -> dict:
-		params = {"page": page}
-		return self._request("GET", endpoints.RECOMMEND_URL, params=params)
