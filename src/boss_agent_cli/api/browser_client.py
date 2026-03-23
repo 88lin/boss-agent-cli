@@ -96,8 +96,11 @@ class BrowserSession:
 			else:
 				self._context = self._browser.new_context()
 			self._page = self._context.new_page()
-			self._page.goto(HOME_URL, wait_until="domcontentloaded")
-			self._page.wait_for_load_state("networkidle")
+			# CDP 模式下用较长超时 + commit 级等待（避免 networkidle 卡住）
+			try:
+				self._page.goto(HOME_URL, wait_until="commit", timeout=15000)
+			except Exception:
+				pass  # 即使导航超时，页面 JS 环境已可用
 			self._started = True
 			self._is_cdp = True
 			print(f"[boss] CDP 连接成功 ({url})，使用用户 Chrome", file=sys.stderr)
