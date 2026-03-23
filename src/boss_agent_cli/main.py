@@ -10,10 +10,11 @@ from boss_agent_cli.output import Logger
 @click.group(context_settings={"allow_interspersed_args": False})
 @click.option("--data-dir", default="~/.boss-agent", help="数据存储目录")
 @click.option("--delay", default=None, help="请求间隔范围（秒），如 1.5-3.0")
+@click.option("--cdp-url", default=None, help="Chrome CDP 调试地址（如 http://localhost:9222），启用则优先用用户 Chrome")
 @click.option("--log-level", default=None, type=click.Choice(["error", "warning", "info", "debug"]))
 @click.option("--json/--no-json", "json_output", default=False, help="强制 JSON 输出（即使在终端中）")
 @click.pass_context
-def cli(ctx, data_dir, delay, log_level, json_output):
+def cli(ctx, data_dir, delay, cdp_url, log_level, json_output):
 	ctx.ensure_object(dict)
 	data_dir = Path(data_dir).expanduser()
 	data_dir.mkdir(parents=True, exist_ok=True)
@@ -31,6 +32,7 @@ def cli(ctx, data_dir, delay, log_level, json_output):
 	level = log_level or cfg["log_level"]
 	ctx.obj["log_level"] = level
 	ctx.obj["logger"] = Logger(level)
+	ctx.obj["cdp_url"] = cdp_url or cfg.get("cdp_url")
 
 
 cli.add_command(schema.schema_cmd, "schema")

@@ -26,6 +26,7 @@ def greet_cmd(ctx, security_id, job_id, message):
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 	delay = ctx.obj["delay"]
+	cdp_url = ctx.obj.get("cdp_url")
 
 	cache = CacheStore(data_dir / "cache" / "boss_agent.db")
 
@@ -42,7 +43,7 @@ def greet_cmd(ctx, security_id, job_id, message):
 
 	try:
 		auth = AuthManager(data_dir, logger=logger)
-		client = BossClient(auth, delay=delay)
+		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
 		result = client.greet(security_id, job_id, message)
 
 		cache.record_greet(security_id, job_id)
@@ -105,6 +106,7 @@ def batch_greet_cmd(ctx, query, city, salary, experience, education, industry, s
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 	delay = ctx.obj["delay"]
+	cdp_url = ctx.obj.get("cdp_url")
 
 	count = min(count, 10)
 
@@ -112,7 +114,7 @@ def batch_greet_cmd(ctx, query, city, salary, experience, education, industry, s
 
 	try:
 		auth = AuthManager(data_dir, logger=logger)
-		client = BossClient(auth, delay=delay)
+		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
 
 		raw = client.search_jobs(
 			query, city=city, salary=salary, experience=experience,

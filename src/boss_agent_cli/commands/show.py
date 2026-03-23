@@ -15,6 +15,7 @@ def show_cmd(ctx, index):
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 	delay = ctx.obj["delay"]
+	cdp_url = ctx.obj.get("cdp_url")
 
 	# 从索引缓存获取职位信息
 	job = get_job_by_index(data_dir, index)
@@ -45,7 +46,7 @@ def show_cmd(ctx, index):
 
 	try:
 		auth = AuthManager(data_dir, logger=logger)
-		client = BossClient(auth, delay=delay)
+		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
 		raw = client.job_card(security_id)
 
 		card = raw.get("zpData", {}).get("jobCard", {})

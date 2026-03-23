@@ -21,6 +21,11 @@ FRIEND_LIST_URL = f"{BASE_URL}/wapi/zprelation/friend/getGeekFriendList.json"
 INTERVIEW_DATA_URL = f"{BASE_URL}/wapi/zpinterview/geek/interview/data.json"
 JOB_HISTORY_URL = f"{BASE_URL}/wapi/zpgeek/history/joblist.json"
 
+# ── API response codes ──────────────────────────────────────────────
+CODE_SUCCESS = 0            # 请求成功
+CODE_STOKEN_EXPIRED = 37    # stoken 过期，需刷新后重试
+CODE_RATE_LIMITED = 9       # 请求频率过高，需冷却后重试
+
 # ── Browser-like headers ─────────────────────────────────────────────
 DEFAULT_HEADERS = {
 	"User-Agent": (

@@ -14,11 +14,12 @@ def me_cmd(ctx, section, deliver_page):
 	"""获取当前登录用户的个人信息、简历、求职期望、投递记录"""
 	data_dir = ctx.obj["data_dir"]
 	delay = ctx.obj["delay"]
+	cdp_url = ctx.obj.get("cdp_url")
 	logger = ctx.obj.get("logger")
 
 	try:
 		auth = AuthManager(data_dir, logger=logger)
-		client = BossClient(auth, delay=delay)
+		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
 		result = {}
 
 		sections = [section] if section else ["user", "resume", "expect", "deliver"]

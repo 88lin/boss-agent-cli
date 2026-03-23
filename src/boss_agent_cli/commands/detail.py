@@ -15,10 +15,11 @@ def detail_cmd(ctx, security_id, lid):
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 	delay = ctx.obj["delay"]
+	cdp_url = ctx.obj.get("cdp_url")
 
 	try:
 		auth = AuthManager(data_dir, logger=logger)
-		client = BossClient(auth, delay=delay)
+		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
 		raw = client.job_card(security_id, lid)
 
 		card = raw.get("zpData", {}).get("jobCard", {})

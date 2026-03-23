@@ -16,10 +16,11 @@ def recommend_cmd(ctx, page):
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 	delay = ctx.obj["delay"]
+	cdp_url = ctx.obj.get("cdp_url")
 
 	try:
 		auth = AuthManager(data_dir, logger=logger)
-		client = BossClient(auth, delay=delay)
+		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
 		cache = CacheStore(data_dir / "cache" / "boss_agent.db")
 
 		raw = client.recommend_jobs(page=page)

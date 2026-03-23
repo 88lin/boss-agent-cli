@@ -15,6 +15,7 @@ def chat_cmd(ctx, page):
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 	delay = ctx.obj["delay"]
+	cdp_url = ctx.obj.get("cdp_url")
 	auth = AuthManager(data_dir, logger=logger)
 
 	token = auth.check_status()
@@ -28,7 +29,7 @@ def chat_cmd(ctx, page):
 		return
 
 	try:
-		client = BossClient(auth, delay=delay)
+		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
 		resp = client.friend_list(page=page)
 		zp_data = resp.get("zpData", {})
 		items = zp_data.get("result") or zp_data.get("friendList") or []

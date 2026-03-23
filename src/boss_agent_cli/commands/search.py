@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import click
 
@@ -32,6 +33,7 @@ _WELFARE_KEYWORDS = {
 }
 
 _MAX_FILTER_PAGES = 5  # 福利筛选时最多翻页数
+_WELFARE_WORKERS = 3   # 并行查详情的线程数
 
 
 def _resolve_welfare_keywords(label: str) -> list[str]:
@@ -85,6 +87,7 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 	delay = ctx.obj["delay"]
+	cdp_url = ctx.obj.get("cdp_url")
 
 	if city and city not in CITY_CODES:
 		handle_error_output(
@@ -120,7 +123,7 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 
 	try:
 		auth = AuthManager(data_dir, logger=logger)
-		client = BossClient(auth, delay=delay)
+		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
 
 		if welfare_conditions:
 			# 福利筛选模式：逐页搜索 + 逐个检查详情
@@ -225,7 +228,9 @@ def _search_with_welfare_filter(
 	stage=None, job_type=None,
 	start_page: int = 1,
 ) -> list[dict]:
-	"""逐页搜索，对每个职位检查所有福利条件是否同时满足（AND 逻辑）"""
+	"""逐页搜索，对每个职位检查所有福利条件是否同时满足（AND 逻辑）。
+	标签不够的职位通过线程池并行查详情。
+	"""
 	matched = []
 	current_page = start_page
 	condition_labels = [c[0] for c in welfare_conditions]
@@ -244,12 +249,13 @@ def _search_with_welfare_filter(
 		if not job_list:
 			break
 
+		# 第一轮：仅用标签快速筛选，收集需要查详情的职位
+		need_detail = []
 		for raw_item in job_list:
 			welfare_list = raw_item.get("welfareList", [])
 			company = raw_item.get("brandName", "")
 			title = raw_item.get("jobName", "")
 
-			# 第一步：仅用福利标签检查
 			match_results = _match_all_welfare(welfare_conditions, welfare_list, "")
 			if match_results:
 				item = JobItem.from_api(raw_item)
@@ -258,28 +264,16 @@ def _search_with_welfare_filter(
 				d["welfare_match"] = "✅ " + ", ".join(match_results)
 				matched.append(d)
 				logger.info(f"  ✅ {company} - {title}（标签匹配）")
-				continue
-
-			# 第二步：标签不够，查详情描述补充判断
-			try:
-				card_raw = client.job_card(
-					raw_item.get("securityId", ""),
-					raw_item.get("lid", ""),
-				)
-				desc = card_raw.get("zpData", {}).get("jobCard", {}).get("postDescription", "")
-			except Exception:
-				desc = ""
-
-			match_results = _match_all_welfare(welfare_conditions, welfare_list, desc)
-			if match_results:
-				item = JobItem.from_api(raw_item)
-				item.greeted = cache.is_greeted(item.security_id)
-				d = item.to_dict()
-				d["welfare_match"] = "✅ " + ", ".join(match_results)
-				matched.append(d)
-				logger.info(f"  ✅ {company} - {title}（详情匹配）")
 			else:
-				logger.info(f"  ❌ {company} - {title}")
+				need_detail.append(raw_item)
+
+		# 第二轮：并行查详情补充判断
+		if need_detail:
+			logger.info(f"  标签未命中 {len(need_detail)} 个，并行查详情...")
+			_check_details_parallel(
+				client, cache, logger, welfare_conditions,
+				need_detail, matched,
+			)
 
 		has_more = zp_data.get("hasMore", False)
 		if not has_more:
@@ -287,3 +281,47 @@ def _search_with_welfare_filter(
 		current_page += 1
 
 	return matched
+
+
+def _fetch_and_check(client, cache, welfare_conditions, raw_item) -> dict | None:
+	"""单个职位：查详情 + 福利匹配。返回匹配结果或 None。"""
+	welfare_list = raw_item.get("welfareList", [])
+	try:
+		card_raw = client.job_card(
+			raw_item.get("securityId", ""),
+			raw_item.get("lid", ""),
+		)
+		desc = card_raw.get("zpData", {}).get("jobCard", {}).get("postDescription", "")
+	except Exception:
+		desc = ""
+
+	match_results = _match_all_welfare(welfare_conditions, welfare_list, desc)
+	if match_results:
+		item = JobItem.from_api(raw_item)
+		item.greeted = cache.is_greeted(item.security_id)
+		d = item.to_dict()
+		d["welfare_match"] = "✅ " + ", ".join(match_results)
+		return d
+	return None
+
+
+def _check_details_parallel(client, cache, logger, welfare_conditions, items, matched):
+	"""并行查详情，匹配的追加到 matched 列表。"""
+	with ThreadPoolExecutor(max_workers=_WELFARE_WORKERS) as pool:
+		futures = {
+			pool.submit(_fetch_and_check, client, cache, welfare_conditions, raw_item): raw_item
+			for raw_item in items
+		}
+		for future in as_completed(futures):
+			raw_item = futures[future]
+			company = raw_item.get("brandName", "")
+			title = raw_item.get("jobName", "")
+			try:
+				result = future.result()
+				if result:
+					matched.append(result)
+					logger.info(f"  ✅ {company} - {title}（详情匹配）")
+				else:
+					logger.info(f"  ❌ {company} - {title}")
+			except Exception:
+				logger.info(f"  ❌ {company} - {title}（查询失败）")

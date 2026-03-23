@@ -12,6 +12,7 @@ def status_cmd(ctx):
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 	delay = ctx.obj["delay"]
+	cdp_url = ctx.obj.get("cdp_url")
 	auth = AuthManager(data_dir, logger=logger)
 
 	token = auth.check_status()
@@ -25,7 +26,7 @@ def status_cmd(ctx):
 		return
 
 	try:
-		client = BossClient(auth, delay=delay)
+		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
 		info = client.user_info()
 		user_name = info.get("zpData", {}).get("name", "未知用户")
 		data = {
