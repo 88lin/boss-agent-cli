@@ -241,9 +241,26 @@ SCHEMA_DATA = {
 			},
 		},
 		"chat": {
-			"description": "查看沟通列表（已打招呼的 Boss）",
+			"description": "查看沟通列表（支持按发起方和时间筛选）",
 			"args": [],
-			"options": {},
+			"options": {
+				"--from": {
+					"type": "string",
+					"default": None,
+					"description": "筛选发起方：boss=对方主动联系 / me=我主动打招呼",
+					"choices": ["boss", "me"],
+				},
+				"--days": {
+					"type": "int",
+					"default": None,
+					"description": "只显示最近 N 天的记录",
+				},
+				"--page": {
+					"type": "int",
+					"default": 1,
+					"description": "页码",
+				},
+			},
 		},
 		"interviews": {
 			"description": "查看面试邀请列表",

@@ -201,3 +201,99 @@ def test_export_to_stdout(mock_auth_cls, mock_client_cls):
 	assert parsed["data"]["count"] == 1
 	assert parsed["data"]["format"] == "csv"
 	assert len(parsed["data"]["jobs"]) == 1
+
+
+def _make_friend_item(name, brand, relation_type, last_ts):
+	"""构造 friend_list API 返回的单条记录"""
+	return {
+		"name": name,
+		"title": "HR",
+		"brandName": brand,
+		"lastMsg": "你好",
+		"lastTime": "今天 10:00",
+		"lastTS": last_ts,
+		"securityId": f"sec_{name}",
+		"encryptJobId": f"job_{name}",
+		"unreadMsgCount": 0,
+		"relationType": relation_type,
+		"friendSource": 0,
+		"sourceType": 0,
+	}
+
+
+@patch("boss_agent_cli.commands.chat.BossClient")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_from_boss_filter(mock_auth_cls, mock_client_cls):
+	"""--from boss 只返回 relationType=1 的记录"""
+	import time
+	now_ms = int(time.time() * 1000)
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	mock_client_cls.return_value.friend_list.return_value = {
+		"zpData": {
+			"result": [
+				_make_friend_item("张HR", "阿里", 1, now_ms),
+				_make_friend_item("我自己", "腾讯", 2, now_ms),
+				_make_friend_item("李HR", "字节", 1, now_ms),
+			],
+		},
+	}
+	runner = CliRunner()
+	result = runner.invoke(cli, ["chat", "--from", "boss"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert len(parsed["data"]) == 2
+	assert all(f["initiated_by"] == "对方主动" for f in parsed["data"])
+
+
+@patch("boss_agent_cli.commands.chat.BossClient")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_days_filter(mock_auth_cls, mock_client_cls):
+	"""--days 3 只返回最近 3 天的记录"""
+	import time
+	now_ms = int(time.time() * 1000)
+	old_ms = now_ms - 5 * 86400 * 1000  # 5 天前
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	mock_client_cls.return_value.friend_list.return_value = {
+		"zpData": {
+			"result": [
+				_make_friend_item("新HR", "阿里", 1, now_ms),
+				_make_friend_item("旧HR", "腾讯", 1, old_ms),
+			],
+		},
+	}
+	runner = CliRunner()
+	result = runner.invoke(cli, ["chat", "--days", "3"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert len(parsed["data"]) == 1
+	assert parsed["data"][0]["brand_name"] == "阿里"
+
+
+@patch("boss_agent_cli.commands.chat.BossClient")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_combined_filter(mock_auth_cls, mock_client_cls):
+	"""--from boss --days 3 组合筛选"""
+	import time
+	now_ms = int(time.time() * 1000)
+	old_ms = now_ms - 5 * 86400 * 1000
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	mock_client_cls.return_value.friend_list.return_value = {
+		"zpData": {
+			"result": [
+				_make_friend_item("新HR", "阿里", 1, now_ms),       # 命中
+				_make_friend_item("新我", "腾讯", 2, now_ms),       # from 不匹配
+				_make_friend_item("旧HR", "字节", 1, old_ms),       # days 不匹配
+			],
+		},
+	}
+	runner = CliRunner()
+	result = runner.invoke(cli, ["chat", "--from", "boss", "--days", "3"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	assert len(parsed["data"]) == 1
+	assert parsed["data"][0]["brand_name"] == "阿里"
+	assert parsed["data"][0]["initiated_by"] == "对方主动"
+
