@@ -241,7 +241,7 @@ SCHEMA_DATA = {
 			},
 		},
 		"chat": {
-			"description": "查看沟通列表（支持按发起方和时间筛选）",
+			"description": "查看沟通列表（支持按发起方、时间筛选，支持导出 md/csv/json）",
 			"args": [],
 			"options": {
 				"--from": {
@@ -254,6 +254,17 @@ SCHEMA_DATA = {
 					"type": "int",
 					"default": None,
 					"description": "只显示最近 N 天的记录",
+				},
+				"--export": {
+					"type": "string",
+					"default": None,
+					"description": "导出格式：md=Markdown / csv=CSV / json=JSON",
+					"choices": ["md", "csv", "json"],
+				},
+				"-o/--output": {
+					"type": "string",
+					"default": None,
+					"description": "输出文件路径（不指定则输出到 stdout）",
 				},
 				"--page": {
 					"type": "int",

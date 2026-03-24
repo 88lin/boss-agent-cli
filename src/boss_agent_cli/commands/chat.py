@@ -1,4 +1,8 @@
+import csv
 import datetime
+import io
+import json
+import os
 import time
 
 import click
@@ -18,9 +22,14 @@ _MSG_STATUS_LABELS = {1: "未读", 2: "已读"}
 @click.option("--from", "from_who", default=None, type=click.Choice(["boss", "me"]),
 	help="筛选发起方：boss=对方主动联系 / me=我主动打招呼")
 @click.option("--days", default=None, type=int, help="只显示最近 N 天的记录")
+@click.option("--export", "export_fmt", default=None,
+	type=click.Choice(["md", "csv", "json"]),
+	help="导出格式：md=Markdown / csv=CSV / json=JSON")
+@click.option("-o", "--output", "output_path", default=None,
+	help="输出文件路径（不指定则输出到 stdout）")
 @click.pass_context
-def chat_cmd(ctx, page, from_who, days):
-	"""查看沟通列表（支持按发起方和时间筛选）"""
+def chat_cmd(ctx, page, from_who, days, export_fmt, output_path):
+	"""查看沟通列表（支持按发起方、时间筛选，支持导出）"""
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 	delay = ctx.obj["delay"]
@@ -76,6 +85,7 @@ def chat_cmd(ctx, page, from_who, days):
 				"initiated_by": _RELATION_LABELS.get(relation_type, "未知"),
 				"last_msg": item.get("lastMsg", "-"),
 				"last_time": last_time_str,
+				"last_ts": last_ts,
 				"msg_status": _MSG_STATUS_LABELS.get(
 					item.get("lastMessageInfo", {}).get("status"), "未知"
 				),
@@ -84,6 +94,39 @@ def chat_cmd(ctx, page, from_who, days):
 				"unread": item.get("unreadMsgCount", 0),
 			})
 
+		# ── 导出模式 ──────────────────────────────────────────────
+		if export_fmt:
+			# L3: 保存 JSON 快照 + diff
+			snapshot_dir = os.path.join(data_dir, "chat-history")
+			diff_result = _save_snapshot_and_diff(snapshot_dir, friends, logger)
+
+			content = _render_export(friends, export_fmt, from_who, days, diff_result)
+			if output_path:
+				os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+				with open(output_path, "w", encoding="utf-8") as f:
+					f.write(content)
+				handle_output(
+					ctx, "chat",
+					{
+						"message": f"已导出 {len(friends)} 条到 {output_path}",
+						"count": len(friends),
+						"format": export_fmt,
+						"path": output_path,
+						"diff": diff_result,
+					},
+					render=lambda d: click.echo(
+						f"已导出 {d['count']} 条到 {d['path']}", err=True
+					),
+					hints={"next_actions": [
+						"boss detail <security_id> — 查看职位详情",
+						"boss greet <security_id> <job_id> — 打招呼",
+					]},
+				)
+			else:
+				click.echo(content)
+			return
+
+		# ── 普通输出模式 ──────────────────────────────────────────
 		# 根据筛选条件动态调整标题
 		title = "沟通列表"
 		if from_who == "boss":
@@ -102,6 +145,7 @@ def chat_cmd(ctx, page, from_who, days):
 					("职称", "title", "dim"),
 					("公司", "brand_name", "green"),
 					("发起方", "initiated_by", "magenta"),
+					("未读", "unread", "red"),
 					("已读", "msg_status", "dim"),
 					("最近消息", "last_msg", "yellow"),
 					("时间", "last_time", "dim"),
@@ -139,6 +183,9 @@ def chat_cmd(ctx, page, from_who, days):
 		)
 
 
+# ── 时间格式化 ────────────────────────────────────────────────────
+
+
 def _format_ts(ts_ms: int) -> str:
 	"""将毫秒时间戳格式化为可读日期"""
 	dt = datetime.datetime.fromtimestamp(ts_ms / 1000)
@@ -151,3 +198,222 @@ def _format_ts(ts_ms: int) -> str:
 	if delta < 7:
 		return f"{delta}天前"
 	return dt.strftime("%m-%d %H:%M")
+
+
+# ── L3: 快照 + Diff ──────────────────────────────────────────────
+
+
+def _save_snapshot_and_diff(
+	snapshot_dir: str, friends: list[dict], logger
+) -> dict:
+	"""保存当日 JSON 快照并与上次对比，返回 diff 结果。"""
+	os.makedirs(snapshot_dir, exist_ok=True)
+	today = datetime.date.today().isoformat()
+	snapshot_path = os.path.join(snapshot_dir, f"{today}.json")
+
+	# 保存当日快照
+	with open(snapshot_path, "w", encoding="utf-8") as f:
+		json.dump(friends, f, ensure_ascii=False, indent=2)
+
+	# 查找上一次快照
+	prev_path = _find_previous_snapshot(snapshot_dir, today)
+	if prev_path is None:
+		return {"is_first": True, "added": [], "removed": [], "new_unread": []}
+
+	try:
+		with open(prev_path, encoding="utf-8") as f:
+			prev_friends = json.load(f)
+	except (json.JSONDecodeError, OSError):
+		logger.warning(f"无法读取上次快照: {prev_path}")
+		return {"is_first": True, "added": [], "removed": [], "new_unread": []}
+
+	# 用 security_id 做 key 对比
+	prev_ids = {item["security_id"] for item in prev_friends if item.get("security_id")}
+	curr_ids = {item["security_id"] for item in friends if item.get("security_id")}
+	curr_map = {item["security_id"]: item for item in friends if item.get("security_id")}
+	prev_map = {item["security_id"]: item for item in prev_friends if item.get("security_id")}
+
+	added = [curr_map[sid] for sid in (curr_ids - prev_ids) if sid in curr_map]
+	removed = [prev_map[sid] for sid in (prev_ids - curr_ids) if sid in prev_map]
+
+	# 新增未读：之前 unread=0 现在 unread>0
+	new_unread = []
+	for sid in (curr_ids & prev_ids):
+		prev_unread = prev_map.get(sid, {}).get("unread", 0)
+		curr_unread = curr_map.get(sid, {}).get("unread", 0)
+		if prev_unread == 0 and curr_unread > 0:
+			new_unread.append(curr_map[sid])
+
+	return {
+		"is_first": False,
+		"prev_date": os.path.basename(prev_path).replace(".json", ""),
+		"added": added,
+		"removed": removed,
+		"new_unread": new_unread,
+	}
+
+
+def _find_previous_snapshot(snapshot_dir: str, today: str) -> str | None:
+	"""找到 today 之前最近的一份快照文件路径。"""
+	snapshots = []
+	for fname in os.listdir(snapshot_dir):
+		if fname.endswith(".json") and fname[:10] != today:
+			snapshots.append(fname)
+	if not snapshots:
+		return None
+	snapshots.sort(reverse=True)
+	return os.path.join(snapshot_dir, snapshots[0])
+
+
+# ── L2: 导出渲染 ─────────────────────────────────────────────────
+
+
+def _render_export(
+	friends: list[dict],
+	fmt: str,
+	from_who: str | None,
+	days: int | None,
+	diff_result: dict,
+) -> str:
+	"""将沟通列表渲染为指定格式的字符串。"""
+	if fmt == "json":
+		return json.dumps(friends, ensure_ascii=False, indent=2)
+	if fmt == "csv":
+		return _render_csv(friends)
+	return _render_markdown(friends, from_who, days, diff_result)
+
+
+def _render_csv(friends: list[dict]) -> str:
+	"""渲染为 CSV 格式。"""
+	if not friends:
+		return ""
+	fields = [
+		"name", "title", "brand_name", "initiated_by",
+		"msg_status", "unread", "last_msg", "last_time",
+		"security_id", "encrypt_job_id",
+	]
+	buf = io.StringIO()
+	writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+	writer.writeheader()
+	for item in friends:
+		writer.writerow(item)
+	return buf.getvalue()
+
+
+def _render_markdown(
+	friends: list[dict],
+	from_who: str | None,
+	days: int | None,
+	diff_result: dict,
+) -> str:
+	"""渲染为分组 Markdown 格式，含摘要和 diff 标记。"""
+	now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+	# 按 relationType 分组
+	groups: dict[str, list[dict]] = {}
+	for item in friends:
+		key = item.get("initiated_by", "未知")
+		groups.setdefault(key, []).append(item)
+
+	# 统计
+	total = len(friends)
+	counts = {k: len(v) for k, v in groups.items()}
+	count_parts = [f"{k} {v}" for k, v in counts.items()]
+
+	# 已读/未读统计（我主动）
+	me_items = groups.get("我主动", [])
+	me_read = sum(1 for x in me_items if x.get("msg_status") == "已读")
+	me_unread = len(me_items) - me_read
+
+	# diff 增量标记集合
+	added_ids = {item.get("security_id") for item in diff_result.get("added", [])}
+
+	lines = [
+		f"# BOSS 直聘沟通列表",
+		"",
+		f"> 生成时间：{now_str}  ",
+		f"> 总计：{total} 条（{' / '.join(count_parts)}）",
+	]
+
+	# diff 摘要
+	if not diff_result.get("is_first", True):
+		prev_date = diff_result.get("prev_date", "?")
+		added_count = len(diff_result.get("added", []))
+		removed_count = len(diff_result.get("removed", []))
+		new_unread_count = len(diff_result.get("new_unread", []))
+		diff_parts = []
+		if added_count:
+			diff_parts.append(f"新增 {added_count} 条")
+		if removed_count:
+			diff_parts.append(f"消失 {removed_count} 条")
+		if new_unread_count:
+			diff_parts.append(f"新消息 {new_unread_count} 条")
+		if diff_parts:
+			lines.append(f"> 较上次（{prev_date}）变化：{'，'.join(diff_parts)}")
+		else:
+			lines.append(f"> 较上次（{prev_date}）无变化")
+
+	lines.append("")
+
+	# 分组渲染
+	group_order = ["对方主动", "我主动", "投递"]
+	for group_key in group_order:
+		group_items = groups.get(group_key)
+		if group_items is None:
+			continue
+		# 如果指定了筛选且不匹配，跳过
+		if from_who == "boss" and group_key != "对方主动":
+			continue
+		if from_who == "me" and group_key != "我主动":
+			continue
+
+		# 小标题
+		subtitle = f"{group_key}（{len(group_items)} 条"
+		if group_key == "我主动":
+			subtitle += f" · 已读 {me_read} / 未读 {me_unread}"
+		subtitle += "）"
+		lines.append(f"## {subtitle}")
+		lines.append("")
+
+		# 表头
+		if group_key == "我主动":
+			lines.append("| # | 公司 | 联系人 | 职称 | 时间 | 未读 | 已读 | 最近消息 | security_id |")
+			lines.append("|---|------|--------|------|------|------|------|----------|-------------|")
+		else:
+			lines.append("| # | 公司 | 联系人 | 职称 | 时间 | 未读 | 已读 | 最近消息 | security_id |")
+			lines.append("|---|------|--------|------|------|------|------|----------|-------------|")
+
+		for idx, item in enumerate(group_items, 1):
+			sid = item.get("security_id", "")
+			is_new = sid in added_ids
+			prefix = "NEW " if is_new else ""
+			msg = item.get("last_msg", "-")
+			if len(msg) > 40:
+				msg = msg[:40] + "…"
+			unread = item.get("unread", 0)
+			unread_str = str(unread) if unread > 0 else ""
+			lines.append(
+				f"| {prefix}{idx} | {item.get('brand_name', '-')} "
+				f"| {item.get('name', '-')} | {item.get('title', '-')} "
+				f"| {item.get('last_time', '-')} | {unread_str} "
+				f"| {item.get('msg_status', '-')} | {msg} | {sid} |"
+			)
+
+		lines.append("")
+
+	# 消失的条目
+	removed = diff_result.get("removed", [])
+	if removed:
+		lines.append("## 已消失（较上次）")
+		lines.append("")
+		lines.append("| 公司 | 联系人 | 上次时间 |")
+		lines.append("|------|--------|----------|")
+		for item in removed:
+			lines.append(
+				f"| {item.get('brand_name', '-')} "
+				f"| {item.get('name', '-')} "
+				f"| {item.get('last_time', '-')} |"
+			)
+		lines.append("")
+
+	return "\n".join(lines) + "\n"

@@ -298,3 +298,133 @@ def test_chat_combined_filter(mock_auth_cls, mock_client_cls):
 	assert parsed["data"][0]["brand_name"] == "阿里"
 	assert parsed["data"][0]["initiated_by"] == "对方主动"
 
+
+@patch("boss_agent_cli.commands.chat.BossClient")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_export_md(mock_auth_cls, mock_client_cls, tmp_path):
+	"""--export md 导出包含 security_id 和 diff 摘要"""
+	import time
+	now_ms = int(time.time() * 1000)
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	mock_client_cls.return_value.friend_list.return_value = {
+		"zpData": {
+			"result": [
+				_make_friend_item("张HR", "阿里", 1, now_ms),
+				_make_friend_item("我自己", "腾讯", 2, now_ms),
+			],
+		},
+	}
+	out_file = str(tmp_path / "chat.md")
+	runner = CliRunner()
+	result = runner.invoke(cli, [
+		"--data-dir", str(tmp_path),
+		"chat", "--export", "md", "-o", out_file,
+	])
+	assert result.exit_code == 0
+	with open(out_file, encoding="utf-8") as f:
+		content = f.read()
+	assert "security_id" in content
+	assert "sec_张HR" in content
+	assert "BOSS 直聘沟通列表" in content
+	assert "对方主动" in content
+	# 快照应已保存
+	import os
+	snapshot_dir = tmp_path / "chat-history"
+	assert snapshot_dir.exists()
+	json_files = list(snapshot_dir.glob("*.json"))
+	assert len(json_files) == 1
+
+
+@patch("boss_agent_cli.commands.chat.BossClient")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_export_csv(mock_auth_cls, mock_client_cls, tmp_path):
+	"""--export csv 导出 CSV 格式"""
+	import time
+	now_ms = int(time.time() * 1000)
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	mock_client_cls.return_value.friend_list.return_value = {
+		"zpData": {
+			"result": [
+				_make_friend_item("张HR", "阿里", 1, now_ms),
+			],
+		},
+	}
+	out_file = str(tmp_path / "chat.csv")
+	runner = CliRunner()
+	result = runner.invoke(cli, [
+		"--data-dir", str(tmp_path),
+		"chat", "--export", "csv", "-o", out_file,
+	])
+	assert result.exit_code == 0
+	with open(out_file, encoding="utf-8") as f:
+		content = f.read()
+	assert "name,title,brand_name" in content
+	assert "张HR" in content
+
+
+@patch("boss_agent_cli.commands.chat.BossClient")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_export_json_stdout(mock_auth_cls, mock_client_cls, tmp_path):
+	"""--export json 不指定 -o 时输出到 stdout"""
+	import time
+	now_ms = int(time.time() * 1000)
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	mock_client_cls.return_value.friend_list.return_value = {
+		"zpData": {
+			"result": [
+				_make_friend_item("张HR", "阿里", 1, now_ms),
+			],
+		},
+	}
+	runner = CliRunner()
+	result = runner.invoke(cli, [
+		"--data-dir", str(tmp_path),
+		"chat", "--export", "json",
+	])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert isinstance(parsed, list)
+	assert parsed[0]["security_id"] == "sec_张HR"
+
+
+@patch("boss_agent_cli.commands.chat.BossClient")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_snapshot_diff(mock_auth_cls, mock_client_cls, tmp_path):
+	"""第二次导出时 diff 能检测新增条目"""
+	import time
+	now_ms = int(time.time() * 1000)
+
+	# 先手动写入一份"昨天"的快照
+	import os, datetime
+	snapshot_dir = tmp_path / "chat-history"
+	snapshot_dir.mkdir(parents=True)
+	yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+	prev_snapshot = [
+		{"name": "张HR", "brand_name": "阿里", "security_id": "sec_张HR",
+		 "unread": 0, "last_time": "昨天"},
+	]
+	with open(snapshot_dir / f"{yesterday}.json", "w") as f:
+		json.dump(prev_snapshot, f)
+
+	# 现在 API 返回多了一条
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	mock_client_cls.return_value.friend_list.return_value = {
+		"zpData": {
+			"result": [
+				_make_friend_item("张HR", "阿里", 1, now_ms),
+				_make_friend_item("新HR", "字节", 1, now_ms),
+			],
+		},
+	}
+	out_file = str(tmp_path / "chat.md")
+	runner = CliRunner()
+	result = runner.invoke(cli, [
+		"--data-dir", str(tmp_path),
+		"chat", "--export", "md", "-o", out_file,
+	])
+	assert result.exit_code == 0
+	with open(out_file, encoding="utf-8") as f:
+		content = f.read()
+	assert "新增 1 条" in content
+	assert "NEW" in content
+
