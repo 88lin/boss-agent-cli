@@ -10,6 +10,7 @@ from boss_agent_cli.display import handle_error_output, handle_output, render_si
 # relationType 映射：API 返回值 → 可读标签
 _RELATION_LABELS = {1: "对方主动", 2: "我主动", 3: "投递"}
 _FROM_FILTER = {"boss": 1, "me": 2}
+_MSG_STATUS_LABELS = {1: "未读", 2: "已读"}
 
 
 @click.command("chat")
@@ -75,6 +76,9 @@ def chat_cmd(ctx, page, from_who, days):
 				"initiated_by": _RELATION_LABELS.get(relation_type, "未知"),
 				"last_msg": item.get("lastMsg", "-"),
 				"last_time": last_time_str,
+				"msg_status": _MSG_STATUS_LABELS.get(
+					item.get("lastMessageInfo", {}).get("status"), "未知"
+				),
 				"security_id": item.get("securityId", ""),
 				"encrypt_job_id": item.get("encryptJobId", ""),
 				"unread": item.get("unreadMsgCount", 0),
@@ -98,6 +102,7 @@ def chat_cmd(ctx, page, from_who, days):
 					("职称", "title", "dim"),
 					("公司", "brand_name", "green"),
 					("发起方", "initiated_by", "magenta"),
+					("已读", "msg_status", "dim"),
 					("最近消息", "last_msg", "yellow"),
 					("时间", "last_time", "dim"),
 				],

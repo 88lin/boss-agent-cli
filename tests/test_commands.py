@@ -218,6 +218,7 @@ def _make_friend_item(name, brand, relation_type, last_ts):
 		"relationType": relation_type,
 		"friendSource": 0,
 		"sourceType": 0,
+		"lastMessageInfo": {"status": 2},
 	}
 
 
