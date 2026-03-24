@@ -135,7 +135,34 @@ def login_via_browser(*, timeout: int = 120) -> dict:
 	}
 
 
+def refresh_stoken_via_cdp(cdp_url: str | None = None) -> str:
+	"""通过 CDP Chrome 刷新 stoken（指纹一致，不会被拒）。"""
+	ws_url = probe_cdp(cdp_url)
+	if not ws_url:
+		raise ConnectionError("CDP 不可用")
+
+	pw = sync_playwright().start()
+	browser = pw.chromium.connect_over_cdp(ws_url)
+	ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+	page = ctx.new_page()
+
+	try:
+		page.goto(HOME_URL, wait_until="commit", timeout=15000)
+	except Exception:
+		pass
+	time.sleep(2)
+
+	stoken = _extract_stoken(page)
+	page.close()
+	pw.stop()
+
+	if not stoken:
+		raise RuntimeError("CDP 刷新 stoken 失败：页面未生成 stoken")
+	return stoken
+
+
 def refresh_stoken(cookies: dict, user_agent: str) -> str:
+	"""通过 headless patchright 刷新 stoken（兜底方案）。"""
 	with sync_playwright() as p:
 		browser = p.chromium.launch(headless=True)
 		context = browser.new_context(user_agent=user_agent)

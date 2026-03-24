@@ -86,7 +86,7 @@ class BossClient:
 				raise AuthError("Token 刷新后仍被拒绝，请重新登录")
 			backoff = (2 ** _retry_count) + random.uniform(0.5, 1.5)
 			time.sleep(backoff)
-			self._auth.force_refresh()
+			self._auth.force_refresh(cdp_url=self._cdp_url)
 			self._client = None
 			return self._request(method, url, _retry_count=_retry_count + 1, **kwargs)
 
@@ -97,7 +97,7 @@ class BossClient:
 		if code == endpoints.CODE_STOKEN_EXPIRED and _retry_count < _MAX_RETRIES:
 			backoff = (2 ** _retry_count) + random.uniform(0.5, 1.5)
 			time.sleep(backoff)
-			self._auth.force_refresh()
+			self._auth.force_refresh(cdp_url=self._cdp_url)
 			self._client = None
 			return self._request(method, url, _retry_count=_retry_count + 1, **kwargs)
 
