@@ -5,6 +5,66 @@ from patchright.sync_api import sync_playwright
 
 LOGIN_PAGE_URL = "https://www.zhipin.com/web/user/"
 HOME_URL = "https://www.zhipin.com/"
+_DEFAULT_CDP_URL = "http://localhost:9222"
+
+
+def probe_cdp(cdp_url: str | None = None) -> str | None:
+	"""探测 CDP 是否可用，返回 WebSocket URL 或 None。"""
+	import httpx
+	base = cdp_url or _DEFAULT_CDP_URL
+	try:
+		resp = httpx.get(f"{base}/json/version", timeout=3)
+		return resp.json().get("webSocketDebuggerUrl")
+	except Exception:
+		return None
+
+
+def login_via_cdp(*, cdp_url: str | None = None, timeout: int = 120) -> dict:
+	"""
+	通过 CDP 连接用户 Chrome 扫码登录。
+	返回 token dict，失败抛异常。
+	"""
+	ws_url = probe_cdp(cdp_url)
+	if not ws_url:
+		raise ConnectionError("CDP 不可用，请先运行 boss-chrome 启动带调试端口的 Chrome")
+
+	print("[boss] 正在 CDP Chrome 中打开登录页...", file=sys.stderr)
+	pw = sync_playwright().start()
+	browser = pw.chromium.connect_over_cdp(ws_url)
+	ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+	page = ctx.new_page()
+
+	try:
+		page.goto(
+			f"{LOGIN_PAGE_URL}?ka=header-login",
+			wait_until="commit", timeout=15000,
+		)
+	except Exception:
+		pass
+
+	print(f"[boss] 请在 Chrome 中扫码登录，等待中...（超时 {timeout}s）", file=sys.stderr)
+
+	for i in range(timeout):
+		time.sleep(1)
+		cookies = ctx.cookies()
+		wt2 = [c for c in cookies if c["name"] == "wt2" and "zhipin" in c.get("domain", "")]
+		if wt2:
+			print("[boss] 检测到登录成功！", file=sys.stderr)
+			break
+		if i > 0 and i % 15 == 0:
+			print(f"[boss] 等待中... {i}s", file=sys.stderr)
+	else:
+		page.close()
+		pw.stop()
+		raise TimeoutError(f"CDP 扫码登录超时（{timeout}s）")
+
+	all_cookies = {c["name"]: c["value"] for c in ctx.cookies() if "zhipin" in c.get("domain", "")}
+	ua = page.evaluate("navigator.userAgent")
+
+	page.close()
+	pw.stop()
+
+	return {"cookies": all_cookies, "stoken": "", "user_agent": ua}
 
 
 def login_via_browser(*, timeout: int = 120) -> dict:

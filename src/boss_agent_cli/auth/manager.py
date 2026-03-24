@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from boss_agent_cli.auth.browser import login_via_browser, refresh_stoken
+from boss_agent_cli.auth.browser import login_via_browser, login_via_cdp, probe_cdp, refresh_stoken
 from boss_agent_cli.auth.cookie_extract import extract_cookies
 from boss_agent_cli.auth.token_store import TokenStore
 from boss_agent_cli.output import Logger
@@ -28,28 +28,63 @@ class AuthManager:
 			raise AuthRequired("未登录，请先执行 boss login")
 		return self._token
 
-	def login(self, *, timeout: int = 120, cookie_source: str | None = None) -> dict:
-		"""Cookie 提取优先，失败降级到 patchright 扫码"""
+	def login(
+		self,
+		*,
+		timeout: int = 120,
+		cookie_source: str | None = None,
+		cdp_url: str | None = None,
+		force_cdp: bool = False,
+	) -> dict:
+		"""三级降级登录：Cookie 提取 → CDP 自动探测 → patchright 扫码。
+
+		Args:
+			force_cdp: 为 True 时跳过 Cookie 提取，CDP 不可用直接报错。
+		"""
+		method = "未知"
+
+		if force_cdp:
+			# --cdp 强制模式：跳过 Cookie，CDP 不可用直接抛异常
+			self._logger.info("强制 CDP 模式，跳过 Cookie 提取")
+			token = login_via_cdp(cdp_url=cdp_url, timeout=timeout)
+			method = "CDP 扫码"
+			self._store.save(token)
+			self._token = token
+			return {**token, "_method": method}
+
 		# 第一步：尝试从本地浏览器提取 Cookie
 		self._logger.info("尝试从本地浏览器提取 Cookie...")
 		token = extract_cookies(cookie_source)
 		if token and token.get("cookies", {}).get("wt2"):
-			# 有 wt2 说明浏览器已登录，先保存 Cookie
-			# stoken 可能为空——没关系，首次 API 调用 403 时 force_refresh 会自动补充
 			if self._verify_cookie(token):
 				self._store.save(token)
 				self._token = token
 				self._logger.info("Cookie 提取成功，已保存")
-				return token
-			self._logger.info("提取的 Cookie 已失效，降级到扫码登录")
+				return {**token, "_method": "Cookie 提取"}
+			self._logger.info("提取的 Cookie 已失效，降级到 CDP")
 		else:
-			self._logger.info("未能从浏览器提取 Cookie，降级到扫码登录")
+			self._logger.info("未能从浏览器提取 Cookie，降级到 CDP")
 
-		# 第二步：降级到 patchright 扫码
+		# 第二步：CDP 自动探测
+		if probe_cdp(cdp_url):
+			self._logger.info("检测到 CDP 可用，尝试 CDP 登录...")
+			try:
+				token = login_via_cdp(cdp_url=cdp_url, timeout=timeout)
+				method = "CDP 扫码"
+				self._store.save(token)
+				self._token = token
+				return {**token, "_method": method}
+			except Exception as e:
+				self._logger.info(f"CDP 登录失败（{e}），降级到 patchright")
+		else:
+			self._logger.info("CDP 不可用，降级到 patchright 扫码")
+
+		# 第三步：patchright 扫码（兜底）
 		token = login_via_browser(timeout=timeout)
+		method = "扫码登录"
 		self._store.save(token)
 		self._token = token
-		return token
+		return {**token, "_method": method}
 
 	def _verify_cookie(self, token: dict) -> bool:
 		"""验证 Cookie 是否有效（不依赖 stoken，直接用 Cookie 请求用户信息）"""

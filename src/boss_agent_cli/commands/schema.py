@@ -7,7 +7,7 @@ SCHEMA_DATA = {
 	"description": "BOSS直聘求职工具。支持搜索职位、查看详情、向招聘者打招呼。",
 	"commands": {
 		"login": {
-			"description": "启动浏览器扫码登录 BOSS 直聘",
+			"description": "登录 BOSS 直聘（三级降级：Cookie 提取 → CDP 自动探测 → patchright 扫码）",
 			"args": [],
 			"options": {
 				"--timeout": {
@@ -18,7 +18,7 @@ SCHEMA_DATA = {
 				"--cdp": {
 					"type": "bool",
 					"default": False,
-					"description": "在 CDP Chrome 中打开登录页扫码（需先用 boss-chrome 启动 Chrome）",
+					"description": "强制 CDP 模式（跳过 Cookie 提取，CDP 不可用直接报错）",
 				},
 			},
 		},
