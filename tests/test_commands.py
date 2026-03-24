@@ -364,8 +364,8 @@ def test_chat_export_csv(mock_auth_cls, mock_client_cls, tmp_path):
 
 @patch("boss_agent_cli.commands.chat.BossClient")
 @patch("boss_agent_cli.commands.chat.AuthManager")
-def test_chat_export_json_stdout(mock_auth_cls, mock_client_cls, tmp_path):
-	"""--export json 不指定 -o 时输出到 stdout"""
+def test_chat_export_json_default_path(mock_auth_cls, mock_client_cls, tmp_path):
+	"""--export json 不指定 -o 时自动保存到 chat-export/ 目录"""
 	import time
 	now_ms = int(time.time() * 1000)
 	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
@@ -383,8 +383,16 @@ def test_chat_export_json_stdout(mock_auth_cls, mock_client_cls, tmp_path):
 	])
 	assert result.exit_code == 0
 	parsed = json.loads(result.output)
-	assert isinstance(parsed, list)
-	assert parsed[0]["security_id"] == "sec_张HR"
+	assert parsed["ok"] is True
+	assert parsed["data"]["format"] == "json"
+	# 文件应已写入 chat-export/
+	import os, datetime
+	today = datetime.date.today().isoformat()
+	expected = tmp_path / "chat-export" / f"沟通列表-{today}.json"
+	assert expected.exists()
+	with open(expected, encoding="utf-8") as f:
+		items = json.load(f)
+	assert items[0]["security_id"] == "sec_张HR"
 
 
 @patch("boss_agent_cli.commands.chat.BossClient")

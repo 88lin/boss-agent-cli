@@ -101,29 +101,34 @@ def chat_cmd(ctx, page, from_who, days, export_fmt, output_path):
 			diff_result = _save_snapshot_and_diff(snapshot_dir, friends, logger)
 
 			content = _render_export(friends, export_fmt, from_who, days, diff_result)
-			if output_path:
-				os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-				with open(output_path, "w", encoding="utf-8") as f:
-					f.write(content)
-				handle_output(
-					ctx, "chat",
-					{
-						"message": f"已导出 {len(friends)} 条到 {output_path}",
-						"count": len(friends),
-						"format": export_fmt,
-						"path": output_path,
-						"diff": diff_result,
-					},
-					render=lambda d: click.echo(
-						f"已导出 {d['count']} 条到 {d['path']}", err=True
-					),
-					hints={"next_actions": [
-						"boss detail <security_id> — 查看职位详情",
-						"boss greet <security_id> <job_id> — 打招呼",
-					]},
-				)
-			else:
-				click.echo(content)
+
+			# 未指定 -o 时，自动生成默认路径（日期命名，同天覆盖）
+			if not output_path:
+				today = datetime.date.today().isoformat()
+				export_dir = os.path.join(data_dir, "chat-export")
+				os.makedirs(export_dir, exist_ok=True)
+				output_path = os.path.join(export_dir, f"沟通列表-{today}.{export_fmt}")
+
+			os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+			with open(output_path, "w", encoding="utf-8") as f:
+				f.write(content)
+			handle_output(
+				ctx, "chat",
+				{
+					"message": f"已导出 {len(friends)} 条到 {output_path}",
+					"count": len(friends),
+					"format": export_fmt,
+					"path": output_path,
+					"diff": diff_result,
+				},
+				render=lambda d: click.echo(
+					f"已导出 {d['count']} 条到 {d['path']}", err=True
+				),
+				hints={"next_actions": [
+					"boss detail <security_id> — 查看职位详情",
+					"boss greet <security_id> <job_id> — 打招呼",
+				]},
+			)
 			return
 
 		# ── 普通输出模式 ──────────────────────────────────────────
