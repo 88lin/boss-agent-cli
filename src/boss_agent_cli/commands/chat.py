@@ -360,6 +360,10 @@ def _render_markdown(
 
 	lines.append("")
 
+	# 全局编号 → security_id 映射表
+	id_map: list[tuple[str, str, str]] = []  # (编号, security_id, 公司+联系人)
+	global_idx = 0
+
 	# 分组渲染
 	group_order = ["对方主动", "我主动", "投递"]
 	for group_key in group_order:
@@ -380,15 +384,12 @@ def _render_markdown(
 		lines.append(f"## {subtitle}")
 		lines.append("")
 
-		# 表头
-		if group_key == "我主动":
-			lines.append("| # | 公司 | 联系人 | 职称 | 时间 | 未读 | 已读 | 最近消息 | security_id |")
-			lines.append("|---|------|--------|------|------|------|------|----------|-------------|")
-		else:
-			lines.append("| # | 公司 | 联系人 | 职称 | 时间 | 未读 | 已读 | 最近消息 | security_id |")
-			lines.append("|---|------|--------|------|------|------|------|----------|-------------|")
+		# 表头（用短编号代替长 security_id）
+		lines.append("| # | 公司 | 联系人 | 职称 | 时间 | 未读 | 已读 | 最近消息 |")
+		lines.append("|---|------|--------|------|------|------|------|----------|")
 
 		for idx, item in enumerate(group_items, 1):
+			global_idx += 1
 			sid = item.get("security_id", "")
 			is_new = sid in added_ids
 			prefix = "NEW " if is_new else ""
@@ -397,12 +398,14 @@ def _render_markdown(
 				msg = msg[:40] + "…"
 			unread = item.get("unread", 0)
 			unread_str = str(unread) if unread > 0 else ""
+			ref = f"S{global_idx}"
 			lines.append(
-				f"| {prefix}{idx} | {item.get('brand_name', '-')} "
+				f"| {prefix}{ref} | {item.get('brand_name', '-')} "
 				f"| {item.get('name', '-')} | {item.get('title', '-')} "
 				f"| {item.get('last_time', '-')} | {unread_str} "
-				f"| {item.get('msg_status', '-')} | {msg} | {sid} |"
+				f"| {item.get('msg_status', '-')} | {msg} |"
 			)
+			id_map.append((ref, sid, f"{item.get('brand_name', '-')} {item.get('name', '-')}"))
 
 		lines.append("")
 
@@ -419,6 +422,19 @@ def _render_markdown(
 				f"| {item.get('name', '-')} "
 				f"| {item.get('last_time', '-')} |"
 			)
+		lines.append("")
+
+	# security_id 映射表（折叠，避免主表 token 膨胀）
+	if id_map:
+		lines.append("<details>")
+		lines.append("<summary>security_id 映射表（点击展开）</summary>")
+		lines.append("")
+		lines.append("| 编号 | 公司/联系人 | security_id |")
+		lines.append("|------|------------|-------------|")
+		for ref, sid, label in id_map:
+			lines.append(f"| {ref} | {label} | {sid} |")
+		lines.append("")
+		lines.append("</details>")
 		lines.append("")
 
 	return "\n".join(lines) + "\n"

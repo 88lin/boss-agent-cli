@@ -323,8 +323,9 @@ def test_chat_export_md(mock_auth_cls, mock_client_cls, tmp_path):
 	assert result.exit_code == 0
 	with open(out_file, encoding="utf-8") as f:
 		content = f.read()
-	assert "security_id" in content
-	assert "sec_张HR" in content
+	assert "security_id" in content  # 折叠映射表中包含
+	assert "sec_张HR" in content    # 完整 sid 在映射表中
+	assert "S1" in content          # 主表用短编号
 	assert "BOSS 直聘沟通列表" in content
 	assert "对方主动" in content
 	# 快照应已保存
