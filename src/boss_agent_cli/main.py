@@ -33,6 +33,7 @@ def cli(ctx, data_dir, delay, cdp_url, log_level, json_output):
 	ctx.obj["log_level"] = level
 	ctx.obj["logger"] = Logger(level)
 	ctx.obj["cdp_url"] = cdp_url or cfg.get("cdp_url")
+	ctx.obj["config"] = cfg
 
 
 cli.add_command(schema.schema_cmd, "schema")

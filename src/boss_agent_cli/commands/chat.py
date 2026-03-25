@@ -105,7 +105,12 @@ def chat_cmd(ctx, page, from_who, days, export_fmt, output_path):
 			# 未指定 -o 时，自动生成默认路径（日期命名，同天覆盖）
 			if not output_path:
 				today = datetime.date.today().isoformat()
-				export_dir = os.path.join(data_dir, "chat-export")
+				# 优先读 config 中的 export_dir，否则 fallback 到 data_dir/chat-export
+				export_dir = ctx.obj.get("config", {}).get("export_dir")
+				if export_dir:
+					export_dir = os.path.expanduser(export_dir)
+				else:
+					export_dir = os.path.join(data_dir, "chat-export")
 				os.makedirs(export_dir, exist_ok=True)
 				output_path = os.path.join(export_dir, f"沟通列表-{today}.{export_fmt}")
 

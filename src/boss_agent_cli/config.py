@@ -10,6 +10,7 @@ DEFAULTS = {
 	"log_level": "error",
 	"login_timeout": 120,
 	"cdp_url": None,
+	"export_dir": "~/Documents/files/boss",
 }
 
 
