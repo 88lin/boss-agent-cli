@@ -103,4 +103,13 @@ def _write_to_file(items: list[dict], fmt: str, path: str):
 					row["skills"] = ", ".join(row["skills"])
 				if isinstance(row.get("welfare"), list):
 					row["welfare"] = ", ".join(row["welfare"])
+				# CSV 公式注入防护
+				row = {k: _sanitize_csv_cell(str(v)) for k, v in row.items()}
 				writer.writerow(row)
+
+
+def _sanitize_csv_cell(value: str) -> str:
+	"""防止 CSV 公式注入：以 =+@- 开头的值前置单引号。"""
+	if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@"):
+		return f"'{value}"
+	return value

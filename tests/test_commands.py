@@ -442,3 +442,145 @@ def test_chat_snapshot_diff(mock_auth_cls, mock_client_cls, tmp_path):
 	assert "新增 1 条" in content
 	assert "NEW" in content
 
+
+# ── 负面路径 / 安全测试 ──────────────────────────────────────────
+
+
+def test_csv_formula_injection_sanitized(tmp_path):
+	"""CSV 导出时以 =+@- 开头的值应被前置单引号"""
+	from boss_agent_cli.commands.chat import _sanitize_csv_cell
+	assert _sanitize_csv_cell("=cmd|' /C calc'!A0") == "'=cmd|' /C calc'!A0"
+	assert _sanitize_csv_cell("+SUM(A1:A2)") == "'+SUM(A1:A2)"
+	assert _sanitize_csv_cell("-1+2") == "'-1+2"
+	assert _sanitize_csv_cell("@risk") == "'@risk"
+	assert _sanitize_csv_cell("正常文本") == "正常文本"
+	assert _sanitize_csv_cell("") == ""
+
+
+def test_md_escape_pipe_and_newline():
+	"""Markdown 表格中管道符和换行应被转义"""
+	from boss_agent_cli.commands.chat import _escape_md_cell
+	assert _escape_md_cell("消息|含管道符") == "消息\\|含管道符"
+	assert _escape_md_cell("多行\n消息") == "多行 消息"
+	assert _escape_md_cell("正常") == "正常"
+
+
+@patch("boss_agent_cli.commands.chat.BossClient")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_export_none_fields(mock_auth_cls, mock_client_cls, tmp_path):
+	"""API 返回 None 字段时不应 crash"""
+	import time
+	now_ms = int(time.time() * 1000)
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	mock_client_cls.return_value.friend_list.return_value = {
+		"zpData": {
+			"result": [{
+				"name": None,
+				"title": None,
+				"brandName": None,
+				"lastMsg": None,
+				"lastTime": "今天",
+				"lastTS": now_ms,
+				"securityId": "sec_null",
+				"encryptJobId": None,
+				"unreadMsgCount": None,
+				"relationType": 1,
+				"lastMessageInfo": {"status": None},
+			}],
+		},
+	}
+	out_file = str(tmp_path / "chat.md")
+	runner = CliRunner()
+	result = runner.invoke(cli, [
+		"--data-dir", str(tmp_path),
+		"chat", "--export", "md", "-o", out_file,
+	])
+	assert result.exit_code == 0
+
+
+@patch("boss_agent_cli.commands.chat.BossClient")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_export_unknown_relation_type(mock_auth_cls, mock_client_cls, tmp_path):
+	"""未知 relationType 应渲染到「未知」分组，不被丢弃"""
+	import time
+	now_ms = int(time.time() * 1000)
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	mock_client_cls.return_value.friend_list.return_value = {
+		"zpData": {
+			"result": [
+				{**_make_friend_item("张HR", "阿里", 1, now_ms), "relationType": 99},
+			],
+		},
+	}
+	out_file = str(tmp_path / "chat.md")
+	runner = CliRunner()
+	result = runner.invoke(cli, [
+		"--data-dir", str(tmp_path),
+		"chat", "--export", "md", "-o", out_file,
+	])
+	assert result.exit_code == 0
+	with open(out_file, encoding="utf-8") as f:
+		content = f.read()
+	assert "未知" in content
+	assert "S1" in content  # 应该被渲染到
+
+
+def test_snapshot_corrupted_structure(tmp_path):
+	"""快照文件结构损坏时应安全降级，不 crash"""
+	from boss_agent_cli.commands.chat import _load_snapshot
+	from boss_agent_cli.output import Logger
+	logger = Logger("error")
+
+	# 非数组
+	bad_file = tmp_path / "bad.json"
+	bad_file.write_text('{"not": "a list"}')
+	assert _load_snapshot(str(bad_file), logger) is None
+
+	# 数组含非 dict
+	bad_file2 = tmp_path / "bad2.json"
+	bad_file2.write_text('[1, "string", {"security_id": "ok"}]')
+	result = _load_snapshot(str(bad_file2), logger)
+	assert result == [{"security_id": "ok"}]
+
+
+@patch("boss_agent_cli.commands.chat.BossClient")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_snapshot_page_merge(mock_auth_cls, mock_client_cls, tmp_path):
+	"""同天不同页的快照应合并，而非覆盖"""
+	import time, datetime
+	now_ms = int(time.time() * 1000)
+
+	# 模拟第一次 page=1 的快照
+	snapshot_dir = tmp_path / "chat-history"
+	snapshot_dir.mkdir(parents=True)
+	today = datetime.date.today().isoformat()
+	page1_data = [
+		{"name": "P1_HR", "brand_name": "公司A", "security_id": "sid_a", "unread": 0},
+	]
+	with open(snapshot_dir / f"{today}.json", "w") as f:
+		json.dump(page1_data, f)
+
+	# 现在 API 返回 page=2 的不同记录
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	mock_client_cls.return_value.friend_list.return_value = {
+		"zpData": {
+			"result": [
+				_make_friend_item("P2_HR", "公司B", 1, now_ms),
+			],
+		},
+	}
+	runner = CliRunner()
+	result = runner.invoke(cli, [
+		"--data-dir", str(tmp_path),
+		"chat", "--export", "json", "-o", str(tmp_path / "out.json"),
+	])
+	assert result.exit_code == 0
+
+	# 验证快照包含两页的数据
+	with open(snapshot_dir / f"{today}.json") as f:
+		merged = json.load(f)
+	sids = {item["security_id"] for item in merged}
+	assert "sid_a" in sids      # page 1 保留
+	assert "sec_P2_HR" in sids  # page 2 新增
+
+

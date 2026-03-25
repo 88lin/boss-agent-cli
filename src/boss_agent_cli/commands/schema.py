@@ -264,7 +264,7 @@ SCHEMA_DATA = {
 				"-o/--output": {
 					"type": "string",
 					"default": None,
-					"description": "输出文件路径（不指定则自动保存到 ~/.boss-agent/chat-export/，按日期命名，同天覆盖）",
+					"description": "输出文件路径（不指定则自动保存到 config.export_dir，默认 ~/Documents/files/boss，按日期命名同天覆盖）",
 				},
 				"--page": {
 					"type": "int",

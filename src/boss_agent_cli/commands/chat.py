@@ -16,6 +16,26 @@ _RELATION_LABELS = {1: "对方主动", 2: "我主动", 3: "投递"}
 _FROM_FILTER = {"boss": 1, "me": 2}
 _MSG_STATUS_LABELS = {1: "未读", 2: "已读"}
 
+# 已知分组渲染顺序
+_GROUP_ORDER = ["对方主动", "我主动", "投递"]
+
+
+# ── 安全工具 ──────────────────────────────────────────────────────
+
+
+def _sanitize_csv_cell(value: str) -> str:
+	"""防止 CSV 公式注入：以 =+@- 开头的值前置单引号。"""
+	if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@"):
+		return f"'{value}"
+	return value
+
+
+def _escape_md_cell(value: str) -> str:
+	"""转义 Markdown 表格中的危险字符。"""
+	if not isinstance(value, str):
+		return str(value)
+	return value.replace("|", "\\|").replace("\n", " ").replace("\r", "")
+
 
 @click.command("chat")
 @click.option("--page", default=1, help="页码")
@@ -26,7 +46,7 @@ _MSG_STATUS_LABELS = {1: "未读", 2: "已读"}
 	type=click.Choice(["md", "csv", "json"]),
 	help="导出格式：md=Markdown / csv=CSV / json=JSON")
 @click.option("-o", "--output", "output_path", default=None,
-	help="输出文件路径（不指定则输出到 stdout）")
+	help="输出文件路径（不指定则自动保存到配置的 export_dir）")
 @click.pass_context
 def chat_cmd(ctx, page, from_who, days, export_fmt, output_path):
 	"""查看沟通列表（支持按发起方、时间筛选，支持导出）"""
@@ -79,19 +99,19 @@ def chat_cmd(ctx, page, from_who, days, export_fmt, output_path):
 				last_time_str = item.get("lastTime", "-")
 
 			friends.append({
-				"name": item.get("name", "-"),
-				"title": item.get("title", "-"),
-				"brand_name": item.get("brandName", "-"),
+				"name": item.get("name") or "-",
+				"title": item.get("title") or "-",
+				"brand_name": item.get("brandName") or "-",
 				"initiated_by": _RELATION_LABELS.get(relation_type, "未知"),
-				"last_msg": item.get("lastMsg", "-"),
+				"last_msg": item.get("lastMsg") or "-",
 				"last_time": last_time_str,
 				"last_ts": last_ts,
 				"msg_status": _MSG_STATUS_LABELS.get(
 					item.get("lastMessageInfo", {}).get("status"), "未知"
 				),
-				"security_id": item.get("securityId", ""),
-				"encrypt_job_id": item.get("encryptJobId", ""),
-				"unread": item.get("unreadMsgCount", 0),
+				"security_id": item.get("securityId") or "",
+				"encrypt_job_id": item.get("encryptJobId") or "",
+				"unread": item.get("unreadMsgCount") or 0,
 			})
 
 		# ── 导出模式 ──────────────────────────────────────────────
@@ -115,7 +135,7 @@ def chat_cmd(ctx, page, from_who, days, export_fmt, output_path):
 				output_path = os.path.join(export_dir, f"沟通列表-{today}.{export_fmt}")
 
 			os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-			with open(output_path, "w", encoding="utf-8") as f:
+			with open(output_path, "w", encoding="utf-8", newline="") as f:
 				f.write(content)
 			handle_output(
 				ctx, "chat",
@@ -216,42 +236,60 @@ def _format_ts(ts_ms: int) -> str:
 def _save_snapshot_and_diff(
 	snapshot_dir: str, friends: list[dict], logger
 ) -> dict:
-	"""保存当日 JSON 快照并与上次对比，返回 diff 结果。"""
+	"""保存当日 JSON 快照（按 security_id 合并）并与上次对比。"""
 	os.makedirs(snapshot_dir, exist_ok=True)
 	today = datetime.date.today().isoformat()
 	snapshot_path = os.path.join(snapshot_dir, f"{today}.json")
 
-	# 保存当日快照
+	# 合并已有的当日快照（解决分页覆盖问题）
+	existing = {}
+	if os.path.exists(snapshot_path):
+		try:
+			with open(snapshot_path, encoding="utf-8") as f:
+				prev_today = json.load(f)
+			if isinstance(prev_today, list):
+				for item in prev_today:
+					if isinstance(item, dict) and item.get("security_id"):
+						existing[item["security_id"]] = item
+		except (json.JSONDecodeError, OSError):
+			pass
+
+	# 用当前数据更新（新数据优先）
+	for item in friends:
+		sid = item.get("security_id")
+		if sid:
+			existing[sid] = item
+
+	merged = list(existing.values())
+
+	# 保存合并后的快照
 	with open(snapshot_path, "w", encoding="utf-8") as f:
-		json.dump(friends, f, ensure_ascii=False, indent=2)
+		json.dump(merged, f, ensure_ascii=False, indent=2)
 
 	# 查找上一次快照
 	prev_path = _find_previous_snapshot(snapshot_dir, today)
 	if prev_path is None:
 		return {"is_first": True, "added": [], "removed": [], "new_unread": []}
 
-	try:
-		with open(prev_path, encoding="utf-8") as f:
-			prev_friends = json.load(f)
-	except (json.JSONDecodeError, OSError):
-		logger.warning(f"无法读取上次快照: {prev_path}")
+	prev_friends = _load_snapshot(prev_path, logger)
+	if prev_friends is None:
 		return {"is_first": True, "added": [], "removed": [], "new_unread": []}
 
 	# 用 security_id 做 key 对比
-	prev_ids = {item["security_id"] for item in prev_friends if item.get("security_id")}
-	curr_ids = {item["security_id"] for item in friends if item.get("security_id")}
-	curr_map = {item["security_id"]: item for item in friends if item.get("security_id")}
+	curr_map = {item["security_id"]: item for item in merged if item.get("security_id")}
 	prev_map = {item["security_id"]: item for item in prev_friends if item.get("security_id")}
+	curr_ids = set(curr_map)
+	prev_ids = set(prev_map)
 
-	added = [curr_map[sid] for sid in (curr_ids - prev_ids) if sid in curr_map]
-	removed = [prev_map[sid] for sid in (prev_ids - curr_ids) if sid in prev_map]
+	added = [curr_map[sid] for sid in (curr_ids - prev_ids)]
+	removed = [prev_map[sid] for sid in (prev_ids - curr_ids)]
 
-	# 新增未读：之前 unread=0 现在 unread>0
+	# 新增未读：检测任何未读增量
 	new_unread = []
 	for sid in (curr_ids & prev_ids):
-		prev_unread = prev_map.get(sid, {}).get("unread", 0)
-		curr_unread = curr_map.get(sid, {}).get("unread", 0)
-		if prev_unread == 0 and curr_unread > 0:
+		prev_unread = prev_map[sid].get("unread", 0) or 0
+		curr_unread = curr_map[sid].get("unread", 0) or 0
+		if curr_unread > prev_unread:
 			new_unread.append(curr_map[sid])
 
 	return {
@@ -261,6 +299,23 @@ def _save_snapshot_and_diff(
 		"removed": removed,
 		"new_unread": new_unread,
 	}
+
+
+def _load_snapshot(path: str, logger) -> list[dict] | None:
+	"""加载并校验快照文件，返回 None 表示不可用。"""
+	try:
+		with open(path, encoding="utf-8") as f:
+			data = json.load(f)
+	except (json.JSONDecodeError, OSError):
+		logger.warning(f"无法读取快照: {path}")
+		return None
+
+	if not isinstance(data, list):
+		logger.warning(f"快照格式异常（非数组）: {path}")
+		return None
+
+	# 过滤掉非 dict 项
+	return [item for item in data if isinstance(item, dict)]
 
 
 def _find_previous_snapshot(snapshot_dir: str, today: str) -> str | None:
@@ -294,7 +349,7 @@ def _render_export(
 
 
 def _render_csv(friends: list[dict]) -> str:
-	"""渲染为 CSV 格式。"""
+	"""渲染为 CSV 格式（含公式注入防护）。"""
 	if not friends:
 		return ""
 	fields = [
@@ -302,11 +357,12 @@ def _render_csv(friends: list[dict]) -> str:
 		"msg_status", "unread", "last_msg", "last_time",
 		"security_id", "encrypt_job_id",
 	]
-	buf = io.StringIO()
+	buf = io.StringIO(newline="")
 	writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
 	writer.writeheader()
 	for item in friends:
-		writer.writerow(item)
+		safe_row = {k: _sanitize_csv_cell(str(v)) for k, v in item.items()}
+		writer.writerow(safe_row)
 	return buf.getvalue()
 
 
@@ -339,7 +395,7 @@ def _render_markdown(
 	added_ids = {item.get("security_id") for item in diff_result.get("added", [])}
 
 	lines = [
-		f"# BOSS 直聘沟通列表",
+		"# BOSS 直聘沟通列表",
 		"",
 		f"> 生成时间：{now_str}  ",
 		f"> 总计：{total} 条（{' / '.join(count_parts)}）",
@@ -369,9 +425,13 @@ def _render_markdown(
 	id_map: list[tuple[str, str, str]] = []  # (编号, security_id, 公司+联系人)
 	global_idx = 0
 
-	# 分组渲染
-	group_order = ["对方主动", "我主动", "投递"]
-	for group_key in group_order:
+	# 构建渲染顺序：已知分组 + 未知分组
+	render_order = list(_GROUP_ORDER)
+	for key in groups:
+		if key not in render_order:
+			render_order.append(key)
+
+	for group_key in render_order:
 		group_items = groups.get(group_key)
 		if group_items is None:
 			continue
@@ -389,7 +449,7 @@ def _render_markdown(
 		lines.append(f"## {subtitle}")
 		lines.append("")
 
-		# 表头（用短编号代替长 security_id）
+		# 表头
 		lines.append("| # | 公司 | 联系人 | 职称 | 时间 | 未读 | 已读 | 最近消息 |")
 		lines.append("|---|------|--------|------|------|------|------|----------|")
 
@@ -398,19 +458,21 @@ def _render_markdown(
 			sid = item.get("security_id", "")
 			is_new = sid in added_ids
 			prefix = "NEW " if is_new else ""
-			msg = item.get("last_msg", "-")
+			msg = str(item.get("last_msg") or "-")
 			if len(msg) > 40:
 				msg = msg[:40] + "…"
-			unread = item.get("unread", 0)
+			unread = item.get("unread") or 0
 			unread_str = str(unread) if unread > 0 else ""
 			ref = f"S{global_idx}"
 			lines.append(
-				f"| {prefix}{ref} | {item.get('brand_name', '-')} "
-				f"| {item.get('name', '-')} | {item.get('title', '-')} "
-				f"| {item.get('last_time', '-')} | {unread_str} "
-				f"| {item.get('msg_status', '-')} | {msg} |"
+				f"| {prefix}{ref} | {_escape_md_cell(item.get('brand_name') or '-')} "
+				f"| {_escape_md_cell(item.get('name') or '-')} "
+				f"| {_escape_md_cell(item.get('title') or '-')} "
+				f"| {_escape_md_cell(item.get('last_time') or '-')} | {unread_str} "
+				f"| {_escape_md_cell(item.get('msg_status') or '-')} "
+				f"| {_escape_md_cell(msg)} |"
 			)
-			id_map.append((ref, sid, f"{item.get('brand_name', '-')} {item.get('name', '-')}"))
+			id_map.append((ref, sid, f"{_escape_md_cell(item.get('brand_name') or '-')} {_escape_md_cell(item.get('name') or '-')}"))
 
 		lines.append("")
 
@@ -423,9 +485,9 @@ def _render_markdown(
 		lines.append("|------|--------|----------|")
 		for item in removed:
 			lines.append(
-				f"| {item.get('brand_name', '-')} "
-				f"| {item.get('name', '-')} "
-				f"| {item.get('last_time', '-')} |"
+				f"| {_escape_md_cell(item.get('brand_name') or '-')} "
+				f"| {_escape_md_cell(item.get('name') or '-')} "
+				f"| {_escape_md_cell(item.get('last_time') or '-')} |"
 			)
 		lines.append("")
 
