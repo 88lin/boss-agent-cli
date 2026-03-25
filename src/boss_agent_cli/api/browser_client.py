@@ -45,6 +45,7 @@ class BrowserSession:
 		self._started = False
 		self._cdp_url = cdp_url
 		self._is_cdp = False
+		self._own_context = False  # 是否由我们创建的 context（需要在 close 时清理）
 
 	def _ensure_started(self):
 		if self._started:
@@ -87,14 +88,25 @@ class BrowserSession:
 		return False
 
 	def _try_connect(self, url: str) -> bool:
-		"""Attempt a single CDP connection."""
+		"""Attempt a single CDP connection with context isolation.
+
+		Extracts cookies from user's existing context, then creates an isolated
+		context to avoid tab leakage into user's daily browsing.
+		"""
 		try:
 			self._browser = self._pw.chromium.connect_over_cdp(url)
 			contexts = self._browser.contexts
+
+			# 从用户现有 context 提取 Cookie（保留登录态），然后创建隔离 context
 			if contexts:
-				self._context = contexts[0]
+				user_cookies = contexts[0].cookies()
+				self._context = self._browser.new_context()
+				if user_cookies:
+					self._context.add_cookies(user_cookies)
 			else:
 				self._context = self._browser.new_context()
+			self._own_context = True  # 标记：由我们创建，close 时需清理
+
 			self._page = self._context.new_page()
 			# CDP 模式下用较长超时 + commit 级等待（避免 networkidle 卡住）
 			try:
@@ -103,7 +115,7 @@ class BrowserSession:
 				pass  # 即使导航超时，页面 JS 环境已可用
 			self._started = True
 			self._is_cdp = True
-			print(f"[boss] CDP 连接成功 ({url})，使用用户 Chrome", file=sys.stderr)
+			print(f"[boss] CDP 连接成功 ({url})，使用用户 Chrome（隔离 context）", file=sys.stderr)
 			return True
 		except Exception:
 			if self._browser:
@@ -149,6 +161,7 @@ class BrowserSession:
 			locale="zh-CN",
 			timezone_id="Asia/Shanghai",
 		)
+		self._own_context = True
 		self._context.add_cookies([
 			{"name": name, "value": value, "domain": ".zhipin.com", "path": "/"}
 			for name, value in self._cookies.items()
@@ -219,10 +232,15 @@ class BrowserSession:
 
 	def close(self):
 		if self._is_cdp:
-			# CDP 模式：只关闭我们创建的 tab，不关闭用户浏览器
+			# CDP 模式：关闭我们创建的 page 和 context，不关闭用户浏览器
 			if self._page:
 				try:
 					self._page.close()
+				except Exception:
+					pass
+			if self._own_context and self._context:
+				try:
+					self._context.close()
 				except Exception:
 					pass
 		else:

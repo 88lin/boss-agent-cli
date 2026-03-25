@@ -9,8 +9,9 @@ from boss_agent_cli.display import handle_error_output, handle_output, render_jo
 @click.command("detail")
 @click.argument("security_id")
 @click.option("--lid", default="", help="列表项 ID（从 search 结果获取，可选）")
+@click.option("--job-id", default="", help="职位加密 ID（提供时走 httpx 快速通道，跳过浏览器）")
 @click.pass_context
-def detail_cmd(ctx, security_id, lid):
+def detail_cmd(ctx, security_id, lid, job_id):
 	"""查看职位完整信息（职位描述、地址、招聘者信息）"""
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
@@ -20,10 +21,14 @@ def detail_cmd(ctx, security_id, lid):
 	try:
 		auth = AuthManager(data_dir, logger=logger)
 		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
-		raw = client.job_card(security_id, lid)
 
-		card = raw.get("zpData", {}).get("jobCard", {})
-		if not card:
+		# 有 job_id 时走 httpx 快速通道（毫秒级），否则走浏览器通道（秒级）
+		if job_id:
+			result = _detail_via_httpx(client, security_id, job_id, data_dir)
+		else:
+			result = _detail_via_browser(client, security_id, lid, data_dir)
+
+		if result is None:
 			handle_error_output(
 				ctx, "detail",
 				code="JOB_NOT_FOUND",
@@ -31,36 +36,8 @@ def detail_cmd(ctx, security_id, lid):
 			)
 			return
 
-		job_id = card.get("encryptJobId", "")
-
-		cache = CacheStore(data_dir / "cache" / "boss_agent.db")
-		greeted = cache.is_greeted(security_id)
-		cache.close()
-
-		result = {
-			"job_id": job_id,
-			"title": card.get("jobName", ""),
-			"company": card.get("brandName", ""),
-			"salary": card.get("salaryDesc", ""),
-			"city": card.get("cityName", ""),
-			"experience": card.get("experienceName", ""),
-			"education": card.get("degreeName", ""),
-			"description": card.get("postDescription", ""),
-			"address": card.get("address", ""),
-			"skills": card.get("jobLabels", []),
-			"boss_name": card.get("bossName", ""),
-			"boss_title": card.get("bossTitle", ""),
-			"boss_active": card.get("activeTimeDesc", "离线"),
-			"security_id": security_id,
-			"greeted": greeted,
-		}
-
-		hints = {
-			"next_actions": [
-				f"boss greet {security_id} {job_id}",
-				"boss search <query>",
-			],
-		}
+		greet_target = f"boss greet {security_id} {result['job_id']}"
+		hints = {"next_actions": [greet_target, "boss search <query>"]}
 		handle_output(ctx, "detail", result, render=render_job_detail, hints=hints)
 	except AuthRequired:
 		handle_error_output(
@@ -83,3 +60,69 @@ def detail_cmd(ctx, security_id, lid):
 			message=f"获取职位详情失败: {e}",
 			recoverable=True, recovery_action="重试",
 		)
+
+
+def _detail_via_httpx(client, security_id, job_id, data_dir):
+	"""快速通道：通过 httpx 获取职位详情（不需要浏览器）"""
+	raw = client.job_detail(job_id)
+	zp = raw.get("zpData", {})
+	job_info = zp.get("jobInfo", {})
+	boss_info = zp.get("bossInfo", {})
+	brand_info = zp.get("brandComInfo", {})
+
+	if not job_info:
+		return None
+
+	cache = CacheStore(data_dir / "cache" / "boss_agent.db")
+	greeted = cache.is_greeted(security_id)
+	cache.close()
+
+	return {
+		"job_id": job_id,
+		"title": job_info.get("jobName", ""),
+		"company": brand_info.get("brandName", ""),
+		"salary": job_info.get("salaryDesc", ""),
+		"city": job_info.get("cityName", ""),
+		"experience": job_info.get("experienceName", ""),
+		"education": job_info.get("degreeName", ""),
+		"description": zp.get("jobDetail", "") or job_info.get("postDescription", ""),
+		"address": job_info.get("address", ""),
+		"skills": job_info.get("jobLabels", []) or job_info.get("skills", []),
+		"boss_name": boss_info.get("name", ""),
+		"boss_title": boss_info.get("title", ""),
+		"boss_active": boss_info.get("activeTimeDesc", "离线"),
+		"security_id": security_id,
+		"greeted": greeted,
+	}
+
+
+def _detail_via_browser(client, security_id, lid, data_dir):
+	"""兜底通道：通过浏览器 job_card 获取职位详情"""
+	raw = client.job_card(security_id, lid)
+	card = raw.get("zpData", {}).get("jobCard", {})
+	if not card:
+		return None
+
+	job_id = card.get("encryptJobId", "")
+
+	cache = CacheStore(data_dir / "cache" / "boss_agent.db")
+	greeted = cache.is_greeted(security_id)
+	cache.close()
+
+	return {
+		"job_id": job_id,
+		"title": card.get("jobName", ""),
+		"company": card.get("brandName", ""),
+		"salary": card.get("salaryDesc", ""),
+		"city": card.get("cityName", ""),
+		"experience": card.get("experienceName", ""),
+		"education": card.get("degreeName", ""),
+		"description": card.get("postDescription", ""),
+		"address": card.get("address", ""),
+		"skills": card.get("jobLabels", []),
+		"boss_name": card.get("bossName", ""),
+		"boss_title": card.get("bossTitle", ""),
+		"boss_active": card.get("activeTimeDesc", "离线"),
+		"security_id": security_id,
+		"greeted": greeted,
+	}
