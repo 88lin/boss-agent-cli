@@ -48,3 +48,9 @@ boss = "boss_agent_cli.main:cli"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "fpdf2>=2.8.7",
+    "markdown>=3.10.2",
+]
