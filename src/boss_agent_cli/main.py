@@ -4,6 +4,7 @@ import click
 
 from boss_agent_cli.commands import schema, login, logout, status, search, detail, greet, recommend, export, cities, me, chat, interviews, show, history
 from boss_agent_cli.config import load_config
+from boss_agent_cli.hooks import create_hook_bus
 from boss_agent_cli.output import Logger
 
 
@@ -34,6 +35,7 @@ def cli(ctx, data_dir, delay, cdp_url, log_level, json_output):
 	ctx.obj["logger"] = Logger(level)
 	ctx.obj["cdp_url"] = cdp_url or cfg.get("cdp_url")
 	ctx.obj["config"] = cfg
+	ctx.obj["hooks"] = create_hook_bus()
 
 
 cli.add_command(schema.schema_cmd, "schema")

@@ -183,3 +183,85 @@ def render_simple_list(
 		table.add_row(*row)
 
 	console.print(table)
+
+
+# ── Additional renderers ────────────────────────────────────────────
+
+
+def render_message_panel(data: dict, *, title: str = "result") -> None:
+	"""Render a simple key-value result as a panel."""
+	lines = []
+	for k, v in data.items():
+		lines.append(f"[bold]{k}:[/bold] {v}")
+	panel = Panel("\n".join(lines), title=title, border_style="green")
+	console.print(panel)
+
+
+def render_batch_operation_summary(data: dict, *, title: str = "batch result") -> None:
+	"""Render batch operation summary (greeted/failed counts + items)."""
+	greeted = data.get("greeted", [])
+	failed = data.get("failed", [])
+	dry_run = data.get("dry_run", False)
+
+	if dry_run:
+		candidates = data.get("candidates", [])
+		console.print(f"[yellow]dry run[/yellow] — {len(candidates)} candidates")
+		if candidates:
+			render_job_table(candidates, f"{title} (dry run)")
+		return
+
+	console.print(f"[green]success: {len(greeted)}[/green]  [red]failed: {len(failed)}[/red]")
+	if greeted:
+		table = Table(title="greeted", show_lines=True)
+		table.add_column("title", style="cyan", max_width=25)
+		table.add_column("company", style="green", max_width=20)
+		for item in greeted:
+			table.add_row(item.get("title", "-"), item.get("company", "-"))
+		console.print(table)
+	if data.get("stopped_reason"):
+		console.print(f"  [yellow]stopped: {data['stopped_reason']}[/yellow]")
+
+
+def render_sectioned_record(data: dict, *, title: str = "info") -> None:
+	"""Render multi-section record (e.g., me command) as panels."""
+	for section, content in data.items():
+		if isinstance(content, dict):
+			lines = []
+			for k, v in content.items():
+				if isinstance(v, (list, dict)):
+					v = str(v)[:200]
+				lines.append(f"[bold]{k}:[/bold] {v or '-'}")
+			panel = Panel("\n".join(lines) if lines else "[dim]empty[/dim]", title=section, border_style="cyan")
+			console.print(panel)
+		else:
+			console.print(f"[bold]{section}:[/bold] {content}")
+
+
+def render_string_grid(items: list[str], title: str, *, columns: int = 4) -> None:
+	"""Render a list of strings as a multi-column grid."""
+	if not items:
+		console.print(f"[yellow]no {title}[/yellow]")
+		return
+
+	table = Table(title=f"{title} ({len(items)})", show_header=False)
+	for _ in range(columns):
+		table.add_column(max_width=20)
+
+	for i in range(0, len(items), columns):
+		row = items[i:i + columns]
+		while len(row) < columns:
+			row.append("")
+		table.add_row(*row)
+
+	console.print(table)
+
+
+def render_export_summary(data: dict) -> None:
+	"""Render export result summary."""
+	path = data.get("path", "")
+	count = data.get("count", 0)
+	fmt = data.get("format", "")
+	if path:
+		console.print(f"[green]exported[/green] {count} jobs to [bold]{path}[/bold] ({fmt})")
+	else:
+		console.print(f"[green]exported[/green] {count} jobs ({fmt})")

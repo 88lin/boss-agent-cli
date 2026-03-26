@@ -7,7 +7,7 @@ import click
 from boss_agent_cli.api.client import BossClient
 from boss_agent_cli.api.models import JobItem
 from boss_agent_cli.auth.manager import AuthManager, AuthRequired, TokenRefreshFailed
-from boss_agent_cli.output import emit_error, emit_success
+from boss_agent_cli.display import handle_error_output, handle_output, render_export_summary, render_job_table
 
 
 @click.command("export")
@@ -27,59 +27,68 @@ def export_cmd(ctx, query, city, salary, count, fmt, output):
 
 	try:
 		auth = AuthManager(data_dir, logger=logger)
-		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
+		with BossClient(auth, delay=delay, cdp_url=cdp_url) as client:
+			all_items = []
+			page = 1
+			max_pages = (count + 14) // 15  # 每页约 15 条
 
-		all_items = []
-		page = 1
-		max_pages = (count + 14) // 15  # 每页约 15 条
-
-		while len(all_items) < count and page <= max_pages:
-			logger.info(f"正在获取第 {page} 页...")
-			raw = client.search_jobs(query, city=city, salary=salary, page=page)
-			zp_data = raw.get("zpData", {})
-			job_list = zp_data.get("jobList", [])
-			if not job_list:
-				break
-
-			for raw_item in job_list:
-				if len(all_items) >= count:
+			while len(all_items) < count and page <= max_pages:
+				logger.info(f"正在获取第 {page} 页...")
+				raw = client.search_jobs(query, city=city, salary=salary, page=page)
+				zp_data = raw.get("zpData", {})
+				job_list = zp_data.get("jobList", [])
+				if not job_list:
 					break
-				item = JobItem.from_api(raw_item)
-				all_items.append(item.to_dict())
 
-			if not zp_data.get("hasMore", False):
-				break
-			page += 1
+				for raw_item in job_list:
+					if len(all_items) >= count:
+						break
+					item = JobItem.from_api(raw_item)
+					all_items.append(item.to_dict())
 
-		if output:
-			_write_to_file(all_items, fmt, output)
-			emit_success("export", {
-				"message": f"已导出 {len(all_items)} 条到 {output}",
-				"count": len(all_items),
-				"format": fmt,
-				"path": output,
-			}, hints={
-				"next_actions": [
-					"boss search <query> — 继续搜索",
-					"boss recommend — 获取个性化推荐",
-				],
-			})
-		else:
-			emit_success("export", {
-				"count": len(all_items),
-				"format": fmt,
-				"jobs": all_items,
-			}, hints={
-				"next_actions": [
-					"boss export <query> -o file.csv — 导出到文件",
-				],
-			})
+				if not zp_data.get("hasMore", False):
+					break
+				page += 1
+
+			if output:
+				_write_to_file(all_items, fmt, output)
+				data = {
+					"message": f"已导出 {len(all_items)} 条到 {output}",
+					"count": len(all_items),
+					"format": fmt,
+					"path": output,
+				}
+				handle_output(
+					ctx, "export", data,
+					render=lambda d: render_export_summary(d),
+					hints={
+						"next_actions": [
+							"boss search <query> — 继续搜索",
+							"boss recommend — 获取个性化推荐",
+						],
+					},
+				)
+			else:
+				data = {
+					"count": len(all_items),
+					"format": fmt,
+					"jobs": all_items,
+				}
+				handle_output(
+					ctx, "export", data,
+					render=lambda d: render_job_table(d.get("jobs", []), "export"),
+					hints={
+						"next_actions": [
+							"boss export <query> -o file.csv — 导出到文件",
+						],
+					},
+				)
 	except AuthRequired:
-		emit_error("export", code="AUTH_REQUIRED", message="未登录", recoverable=True, recovery_action="boss login")
+		handle_error_output(ctx, "export", code="AUTH_REQUIRED", message="未登录", recoverable=True, recovery_action="boss login")
 	except TokenRefreshFailed:
-		emit_error("export", code="TOKEN_REFRESH_FAILED", message="Token 刷新失败", recoverable=True, recovery_action="boss login")
+		handle_error_output(ctx, "export", code="TOKEN_REFRESH_FAILED", message="Token 刷新失败", recoverable=True, recovery_action="boss login")
 	except Exception as e:
-		emit_error("export", code="NETWORK_ERROR", message=f"导出失败: {e}", recoverable=True, recovery_action="重试")
+		handle_error_output(ctx, "export", code="NETWORK_ERROR", message=f"导出失败: {e}", recoverable=True, recovery_action="重试")
 
 
 def _write_to_file(items: list[dict], fmt: str, path: str):

@@ -5,6 +5,14 @@ from click.testing import CliRunner
 from boss_agent_cli.main import cli
 
 
+def _ctx_mock(mock_cls):
+	"""Make mock class support context manager (with ... as client:)."""
+	instance = mock_cls.return_value
+	instance.__enter__ = lambda self: self
+	instance.__exit__ = lambda self, *a: None
+	return instance
+
+
 def test_schema_command():
 	runner = CliRunner()
 	result = runner.invoke(cli, ["schema"])
@@ -60,7 +68,7 @@ def test_greet_already_greeted(mock_cache_cls, mock_auth_cls, mock_client_cls):
 def test_batch_greet_dry_run(mock_cache_cls, mock_auth_cls, mock_client_cls, mock_time):
 	mock_cache = mock_cache_cls.return_value
 	mock_cache.is_greeted.return_value = False
-	mock_client = mock_client_cls.return_value
+	mock_client = _ctx_mock(mock_client_cls)
 	mock_client.search_jobs.return_value = {
 		"zpData": {
 			"jobList": [
@@ -125,7 +133,7 @@ def test_schema_includes_new_commands():
 def test_recommend_success(mock_auth_cls, mock_client_cls, mock_cache_cls):
 	mock_cache = mock_cache_cls.return_value
 	mock_cache.is_greeted.return_value = False
-	mock_client = mock_client_cls.return_value
+	mock_client = _ctx_mock(mock_client_cls)
 	mock_client.recommend_jobs.return_value = {
 		"zpData": {
 			"hasMore": True,
@@ -166,7 +174,7 @@ def test_recommend_success(mock_auth_cls, mock_client_cls, mock_cache_cls):
 @patch("boss_agent_cli.commands.export.BossClient")
 @patch("boss_agent_cli.commands.export.AuthManager")
 def test_export_to_stdout(mock_auth_cls, mock_client_cls):
-	mock_client = mock_client_cls.return_value
+	mock_client = _ctx_mock(mock_client_cls)
 	mock_client.search_jobs.return_value = {
 		"zpData": {
 			"hasMore": False,
