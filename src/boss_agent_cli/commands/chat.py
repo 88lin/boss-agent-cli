@@ -1,5 +1,6 @@
 import csv
 import datetime
+import html as _html
 import io
 import json
 import os
@@ -43,8 +44,8 @@ def _escape_md_cell(value: str) -> str:
 	help="筛选发起方：boss=对方主动联系 / me=我主动打招呼")
 @click.option("--days", default=None, type=int, help="只显示最近 N 天的记录")
 @click.option("--export", "export_fmt", default=None,
-	type=click.Choice(["md", "csv", "json"]),
-	help="导出格式：md=Markdown / csv=CSV / json=JSON")
+	type=click.Choice(["html", "md", "csv", "json"]),
+	help="导出格式：html=HTML / md=Markdown / csv=CSV / json=JSON")
 @click.option("-o", "--output", "output_path", default=None,
 	help="输出文件路径（不指定则自动保存到配置的 export_dir）")
 @click.pass_context
@@ -345,6 +346,8 @@ def _render_export(
 		return json.dumps(friends, ensure_ascii=False, indent=2)
 	if fmt == "csv":
 		return _render_csv(friends)
+	if fmt == "html":
+		return _render_html(friends, from_who, days, diff_result)
 	return _render_markdown(friends, from_who, days, diff_result)
 
 
@@ -505,3 +508,180 @@ def _render_markdown(
 		lines.append("")
 
 	return "\n".join(lines) + "\n"
+
+
+def _render_html(
+	friends: list[dict],
+	from_who: str | None,
+	days: int | None,
+	diff_result: dict,
+) -> str:
+	"""渲染为 HTML 格式，含分组、diff 标记和 security_id 映射。"""
+	esc = _html.escape
+	now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+	# 按 relationType 分组
+	groups: dict[str, list[dict]] = {}
+	for item in friends:
+		key = item.get("initiated_by", "未知")
+		groups.setdefault(key, []).append(item)
+
+	total = len(friends)
+	counts = {k: len(v) for k, v in groups.items()}
+	count_parts = [f"{k} {v}" for k, v in counts.items()]
+
+	me_items = groups.get("我主动", [])
+	me_read = sum(1 for x in me_items if x.get("msg_status") == "已读")
+	me_unread = len(me_items) - me_read
+
+	added_ids = {item.get("security_id") for item in diff_result.get("added", [])}
+
+	# diff 摘要
+	diff_html = ""
+	if not diff_result.get("is_first", True):
+		prev_date = diff_result.get("prev_date", "?")
+		parts = []
+		added_count = len(diff_result.get("added", []))
+		removed_count = len(diff_result.get("removed", []))
+		new_unread_count = len(diff_result.get("new_unread", []))
+		if added_count:
+			parts.append(f"新增 {added_count} 条")
+		if removed_count:
+			parts.append(f"消失 {removed_count} 条")
+		if new_unread_count:
+			parts.append(f"新消息 {new_unread_count} 条")
+		change = "，".join(parts) if parts else "无变化"
+		diff_html = f"<div class='diff'>较上次（{esc(prev_date)}）变化：{esc(change)}</div>"
+
+	# 构建渲染顺序
+	render_order = list(_GROUP_ORDER)
+	for key in groups:
+		if key not in render_order:
+			render_order.append(key)
+
+	sections = []
+	id_map: list[tuple[str, str, str]] = []
+	global_idx = 0
+
+	for group_key in render_order:
+		group_items = groups.get(group_key)
+		if group_items is None:
+			continue
+		if from_who == "boss" and group_key != "对方主动":
+			continue
+		if from_who == "me" and group_key != "我主动":
+			continue
+
+		subtitle = f"{esc(group_key)}（{len(group_items)} 条"
+		if group_key == "我主动":
+			subtitle += f" · 已读 {me_read} / 未读 {me_unread}"
+		subtitle += "）"
+
+		rows = []
+		for item in group_items:
+			global_idx += 1
+			sid = item.get("security_id", "")
+			is_new = sid in added_ids
+			ref = f"S{global_idx}"
+			badge = '<span class="badge-new">NEW</span> ' if is_new else ""
+			msg = str(item.get("last_msg") or "-")
+			if len(msg) > 60:
+				msg = msg[:60] + "…"
+			unread = item.get("unread") or 0
+			unread_str = f'<span class="unread">{unread}</span>' if unread > 0 else ""
+			rows.append(
+				f"<tr>"
+				f"<td>{badge}{ref}</td>"
+				f"<td class='company'>{esc(item.get('brand_name') or '-')}</td>"
+				f"<td>{esc(item.get('name') or '-')}</td>"
+				f"<td class='dim'>{esc(item.get('title') or '-')}</td>"
+				f"<td class='dim'>{esc(item.get('last_time') or '-')}</td>"
+				f"<td>{unread_str}</td>"
+				f"<td class='dim'>{esc(item.get('msg_status') or '-')}</td>"
+				f"<td class='msg'>{esc(msg)}</td>"
+				f"</tr>"
+			)
+			id_map.append((ref, sid, f"{esc(item.get('brand_name') or '-')} {esc(item.get('name') or '-')}"))
+
+		sections.append(f"""
+		<h2>{subtitle}</h2>
+		<table>
+			<thead><tr>
+				<th>#</th><th>公司</th><th>联系人</th><th>职称</th>
+				<th>时间</th><th>未读</th><th>已读</th><th>最近消息</th>
+			</tr></thead>
+			<tbody>{''.join(rows)}</tbody>
+		</table>""")
+
+	# 消失的条目
+	removed = diff_result.get("removed", [])
+	removed_html = ""
+	if removed:
+		rrows = []
+		for item in removed:
+			rrows.append(
+				f"<tr>"
+				f"<td>{esc(item.get('brand_name') or '-')}</td>"
+				f"<td>{esc(item.get('name') or '-')}</td>"
+				f"<td class='dim'>{esc(item.get('last_time') or '-')}</td>"
+				f"</tr>"
+			)
+		removed_html = f"""
+		<h2>已消失（较上次）</h2>
+		<table>
+			<thead><tr><th>公司</th><th>联系人</th><th>上次时间</th></tr></thead>
+			<tbody>{''.join(rrows)}</tbody>
+		</table>"""
+
+	# security_id 映射表
+	map_rows = []
+	for ref, sid, label in id_map:
+		map_rows.append(f"<tr><td>{ref}</td><td>{label}</td><td class='sid'>{esc(sid)}</td></tr>")
+	map_html = f"""
+	<details>
+		<summary>security_id 映射表（点击展开）</summary>
+		<table>
+			<thead><tr><th>编号</th><th>公司/联系人</th><th>security_id</th></tr></thead>
+			<tbody>{''.join(map_rows)}</tbody>
+		</table>
+	</details>""" if map_rows else ""
+
+	return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BOSS 直聘沟通列表 · {esc(now_str)}</title>
+<style>
+  :root {{ --green: #00b38a; --bg: #f8f9fa; }}
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+         background: var(--bg); color: #333; line-height: 1.6; padding: 20px; max-width: 960px; margin: 0 auto; }}
+  h1 {{ text-align: center; font-size: 20px; margin-bottom: 4px; }}
+  .sub {{ text-align: center; color: #888; font-size: 13px; margin-bottom: 6px; }}
+  .diff {{ text-align: center; color: #e65100; font-size: 12px; margin-bottom: 16px; }}
+  h2 {{ font-size: 15px; color: #1a1a1a; margin: 20px 0 8px; padding-left: 8px;
+       border-left: 3px solid var(--green); }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 12px; }}
+  th {{ background: #f0f0f0; font-weight: 600; text-align: left; padding: 6px 8px; white-space: nowrap; }}
+  td {{ padding: 6px 8px; border-bottom: 1px solid #eee; }}
+  tr:hover {{ background: #f5faf8; }}
+  .company {{ color: var(--green); font-weight: 600; }}
+  .dim {{ color: #888; }}
+  .msg {{ max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #555; }}
+  .unread {{ background: #ff4d4f; color: #fff; border-radius: 8px; padding: 1px 6px; font-size: 11px; }}
+  .badge-new {{ background: var(--green); color: #fff; border-radius: 4px; padding: 1px 5px; font-size: 10px; font-weight: 600; }}
+  .sid {{ font-size: 10px; color: #999; word-break: break-all; max-width: 300px; }}
+  details {{ margin-top: 16px; }}
+  summary {{ cursor: pointer; color: #666; font-size: 13px; }}
+  @media (max-width: 700px) {{
+    table {{ font-size: 12px; }}
+    .msg {{ max-width: 160px; }}
+  }}
+</style></head><body>
+<h1>BOSS 直聘沟通列表</h1>
+<div class="sub">生成时间：{esc(now_str)} · 总计：{total} 条（{esc(' / '.join(count_parts))}）</div>
+{diff_html}
+{''.join(sections)}
+{removed_html}
+{map_html}
+</body></html>
+"""
