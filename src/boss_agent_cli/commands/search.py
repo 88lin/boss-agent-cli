@@ -102,6 +102,22 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 		items = pipeline_result.items
 		save_index(data_dir, items, source=f"search:{query}")
 
+		# Emit search_completed hook
+		hooks = ctx.obj.get("hooks")
+		if hooks:
+			hooks.search_completed.call({
+				"query": query,
+				"page": page,
+				"result_count": len(items),
+				"stats": {
+					"pages_scanned": pipeline_result.stats.pages_scanned,
+					"jobs_seen": pipeline_result.stats.jobs_seen,
+					"jobs_prefiltered": pipeline_result.stats.jobs_prefiltered,
+					"detail_checks": pipeline_result.stats.detail_checks,
+				},
+				"source": "search",
+			})
+
 		pagination = {
 			"page": page,
 			"has_more": pipeline_result.has_more,

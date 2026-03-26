@@ -48,10 +48,38 @@ def greet_cmd(ctx, security_id, job_id, message):
 	try:
 		auth = AuthManager(data_dir, logger=logger)
 		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
+
+		# greet_before hook — allows veto
+		hooks = ctx.obj.get("hooks")
+		if hooks:
+			veto = hooks.greet_before.call({
+				"security_id": security_id,
+				"job_id": job_id,
+				"message": message,
+				"source": "greet",
+			})
+			if veto:
+				cache.close()
+				handle_error_output(
+					ctx, "greet", code="HOOK_BLOCKED",
+					message=f"打招呼被钩子阻止: {veto}",
+					recoverable=True,
+				)
+				return
+
 		result = client.greet(security_id, job_id, message)
 
 		cache.record_greet(security_id, job_id)
 		cache.close()
+
+		# greet_after hook
+		if hooks:
+			hooks.greet_after.call({
+				"security_id": security_id,
+				"job_id": job_id,
+				"success": True,
+				"source": "greet",
+			})
 
 		data = {
 			"security_id": security_id,
