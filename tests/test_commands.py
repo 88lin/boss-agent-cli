@@ -592,3 +592,63 @@ def test_chat_snapshot_page_merge(mock_auth_cls, mock_client_cls, tmp_path):
 	assert "sec_P2_HR" in sids  # page 2 新增
 
 
+@patch("boss_agent_cli.commands.chat.BossClient")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_export_html(mock_auth_cls, mock_client_cls, tmp_path):
+	"""--export html 导出 HTML 格式，包含表格、分组和映射表"""
+	import time
+	now_ms = int(time.time() * 1000)
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	mock_client_cls.return_value.friend_list.return_value = {
+		"zpData": {
+			"result": [
+				_make_friend_item("张HR", "阿里", 1, now_ms),
+				_make_friend_item("我自己", "腾讯", 2, now_ms),
+			],
+		},
+	}
+	out_file = str(tmp_path / "chat.html")
+	runner = CliRunner()
+	result = runner.invoke(cli, [
+		"--data-dir", str(tmp_path),
+		"chat", "--export", "html", "-o", out_file,
+	])
+	assert result.exit_code == 0
+	with open(out_file, encoding="utf-8") as f:
+		content = f.read()
+	assert "<!DOCTYPE html>" in content
+	assert "BOSS 直聘沟通列表" in content
+	assert "对方主动" in content
+	assert "S1" in content  # 编号
+	assert "sec_张HR" in content  # 映射表中的 security_id
+	assert "阿里" in content
+	assert "<table>" in content
+
+
+@patch("boss_agent_cli.commands.chat.BossClient")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_export_html_xss_prevention(mock_auth_cls, mock_client_cls, tmp_path):
+	"""HTML 导出应转义特殊字符，防止 XSS"""
+	import time
+	now_ms = int(time.time() * 1000)
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	xss_item = _make_friend_item("<script>alert(1)</script>", "公司&名", 1, now_ms)
+	xss_item["lastMsg"] = '<img onerror="alert(1)">'
+	mock_client_cls.return_value.friend_list.return_value = {
+		"zpData": {"result": [xss_item]},
+	}
+	out_file = str(tmp_path / "chat_xss.html")
+	runner = CliRunner()
+	result = runner.invoke(cli, [
+		"--data-dir", str(tmp_path),
+		"chat", "--export", "html", "-o", out_file,
+	])
+	assert result.exit_code == 0
+	with open(out_file, encoding="utf-8") as f:
+		content = f.read()
+	# 原始 HTML 标签不能出现（已被转义为实体）
+	assert "<script>" not in content
+	assert '<img onerror' not in content
+	# 转义后的实体应该存在
+	assert "&lt;script&gt;" in content
+	assert "&amp;名" in content
