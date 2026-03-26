@@ -96,11 +96,16 @@ SCHEMA_DATA = {
 			},
 		},
 		"detail": {
-			"description": "查看职位完整信息（职位描述、地址、招聘者信息）",
+			"description": "查看职位完整信息（职位描述、地址、招聘者信息）。传入 --job-id 走 httpx 快速通道（毫秒级），否则先查缓存、最后降级浏览器通道（秒级）",
 			"args": [
-				{"name": "security_id", "required": True, "description": "安全 ID，从 search 结果中获取"},
+				{"name": "security_id", "required": True, "description": "安全 ID，从 search/chat/recommend 结果中获取"},
 			],
 			"options": {
+				"--job-id": {
+					"type": "string",
+					"default": "",
+					"description": "职位加密 ID（从 search/chat 结果的 encrypt_job_id 获取，传入时走 httpx 快速通道，跳过浏览器）",
+				},
 				"--lid": {
 					"type": "string",
 					"default": "",
