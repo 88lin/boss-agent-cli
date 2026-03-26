@@ -197,7 +197,7 @@ SCHEMA_DATA = {
 			},
 		},
 		"export": {
-			"description": "导出搜索结果为 CSV 或 JSON 文件",
+			"description": "导出搜索结果为 HTML / CSV / JSON 文件",
 			"args": [
 				{"name": "query", "required": True, "description": "搜索关键词"},
 			],
@@ -205,7 +205,7 @@ SCHEMA_DATA = {
 				"--city": {"type": "string", "default": None, "description": "城市名称"},
 				"--salary": {"type": "string", "default": None, "description": "薪资范围"},
 				"--count": {"type": "int", "default": 50, "description": "导出数量"},
-				"--format": {"type": "string", "default": "csv", "description": "输出格式", "enum": ["csv", "json"]},
+				"--format": {"type": "string", "default": "csv", "description": "输出格式", "enum": ["html", "csv", "json"]},
 				"--output": {"type": "string", "default": None, "description": "输出文件路径（不指定则输出到 stdout）"},
 			},
 		},
@@ -246,7 +246,7 @@ SCHEMA_DATA = {
 			},
 		},
 		"chat": {
-			"description": "查看沟通列表（支持按发起方、时间筛选，支持导出 md/csv/json）",
+			"description": "查看沟通列表（支持按发起方、时间筛选，支持导出 html/md/csv/json）",
 			"args": [],
 			"options": {
 				"--from": {
@@ -263,8 +263,8 @@ SCHEMA_DATA = {
 				"--export": {
 					"type": "string",
 					"default": None,
-					"description": "导出格式：md=Markdown / csv=CSV / json=JSON",
-					"choices": ["md", "csv", "json"],
+					"description": "导出格式：html=HTML / md=Markdown / csv=CSV / json=JSON",
+					"choices": ["html", "md", "csv", "json"],
 				},
 				"-o/--output": {
 					"type": "string",

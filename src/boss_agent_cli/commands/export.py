@@ -1,4 +1,5 @@
 import csv
+import html as _html
 import io
 import json
 
@@ -15,7 +16,7 @@ from boss_agent_cli.display import handle_error_output, handle_output, render_ex
 @click.option("--city", default=None, help="城市名称")
 @click.option("--salary", default=None, help="薪资范围")
 @click.option("--count", default=50, type=int, help="导出数量")
-@click.option("--format", "fmt", default="csv", type=click.Choice(["csv", "json"]), help="输出格式")
+@click.option("--format", "fmt", default="csv", type=click.Choice(["html", "csv", "json"]), help="输出格式")
 @click.option("--output", "-o", default=None, help="输出文件路径（不指定则输出到 stdout JSON 信封）")
 @click.pass_context
 def export_cmd(ctx, query, city, salary, count, fmt, output):
@@ -115,6 +116,8 @@ def _write_to_file(items: list[dict], fmt: str, path: str):
 				# CSV 公式注入防护
 				row = {k: _sanitize_csv_cell(str(v)) for k, v in row.items()}
 				writer.writerow(row)
+	elif fmt == "html":
+		_write_html(items, path)
 
 
 def _sanitize_csv_cell(value: str) -> str:
@@ -122,3 +125,76 @@ def _sanitize_csv_cell(value: str) -> str:
 	if isinstance(value, str) and value and value[0] in ("=", "+", "-", "@"):
 		return f"'{value}"
 	return value
+
+
+def _write_html(items: list[dict], path: str):
+	"""将搜索结果导出为 HTML 表格。"""
+	esc = _html.escape
+	if not items:
+		with open(path, "w", encoding="utf-8") as f:
+			f.write("<html><body><p>无数据</p></body></html>")
+		return
+
+	rows = []
+	for i, item in enumerate(items, 1):
+		skills = item.get("skills", [])
+		if isinstance(skills, list):
+			skills_html = " ".join(f'<span class="tag sk">{esc(s)}</span>' for s in skills)
+		else:
+			skills_html = esc(str(skills))
+		welfare = item.get("welfare", [])
+		if isinstance(welfare, list):
+			welfare_html = " ".join(f'<span class="tag wf">{esc(w)}</span>' for w in welfare)
+		else:
+			welfare_html = esc(str(welfare))
+		rows.append(
+			f"<tr>"
+			f"<td>{i}</td>"
+			f"<td class='title'>{esc(item.get('title', ''))}</td>"
+			f"<td class='company'>{esc(item.get('company', ''))}</td>"
+			f"<td class='salary'>{esc(item.get('salary', ''))}</td>"
+			f"<td>{esc(item.get('city', ''))}</td>"
+			f"<td>{esc(item.get('experience', ''))}</td>"
+			f"<td>{esc(item.get('education', ''))}</td>"
+			f"<td>{skills_html}</td>"
+			f"<td>{welfare_html}</td>"
+			f"<td class='dim'>{esc(item.get('boss_name', ''))}</td>"
+			f"</tr>"
+		)
+
+	html_content = f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BOSS 直聘搜索结果导出</title>
+<style>
+  :root {{ --green: #00b38a; --bg: #f8f9fa; }}
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+         background: var(--bg); color: #333; line-height: 1.6; padding: 20px; max-width: 1100px; margin: 0 auto; }}
+  h1 {{ text-align: center; font-size: 20px; margin-bottom: 4px; }}
+  .sub {{ text-align: center; color: #888; font-size: 13px; margin-bottom: 16px; }}
+  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+  th {{ background: #f0f0f0; font-weight: 600; text-align: left; padding: 6px 8px; white-space: nowrap; }}
+  td {{ padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: top; }}
+  tr:hover {{ background: #f5faf8; }}
+  .title {{ font-weight: 600; }}
+  .company {{ color: var(--green); font-weight: 600; }}
+  .salary {{ color: #ff6633; font-weight: 700; white-space: nowrap; }}
+  .dim {{ color: #888; }}
+  .tag {{ display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; margin: 1px; }}
+  .sk {{ background: #e8f5e9; color: #2e7d32; }}
+  .wf {{ background: #fff3e0; color: #e65100; }}
+</style></head><body>
+<h1>BOSS 直聘搜索结果</h1>
+<div class="sub">共 {len(items)} 条</div>
+<table>
+  <thead><tr>
+    <th>#</th><th>岗位</th><th>公司</th><th>薪资</th><th>城市</th>
+    <th>经验</th><th>学历</th><th>技能</th><th>福利</th><th>招聘者</th>
+  </tr></thead>
+  <tbody>{''.join(rows)}</tbody>
+</table>
+</body></html>"""
+
+	with open(path, "w", encoding="utf-8") as f:
+		f.write(html_content)
