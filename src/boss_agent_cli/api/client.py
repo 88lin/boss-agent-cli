@@ -1,5 +1,7 @@
+import atexit
 import random
 import time
+import weakref
 
 import httpx
 
@@ -7,6 +9,20 @@ from boss_agent_cli.api import endpoints
 from boss_agent_cli.api.throttle import RequestThrottle
 
 _MAX_RETRIES = 3
+
+# atexit safeguard: close any BossClient instances not explicitly closed
+_OPEN_CLIENTS: weakref.WeakSet["BossClient"] = weakref.WeakSet()
+
+
+def _close_open_clients():
+	for client in list(_OPEN_CLIENTS):
+		try:
+			client.close()
+		except Exception:
+			pass
+
+
+atexit.register(_close_open_clients)
 
 
 class AuthError(Exception):
@@ -23,6 +39,8 @@ class BossClient:
 		self._browser_session = None
 		self._throttle = RequestThrottle(delay)
 		self._cdp_url = cdp_url
+		self._closed = False
+		_OPEN_CLIENTS.add(self)
 
 	def _get_client(self) -> httpx.Client:
 		if self._client is None:
@@ -203,13 +221,17 @@ class BossClient:
 	# ── Lifecycle ────────────────────────────────────────────────────
 
 	def close(self):
-		"""Release httpx client and browser session."""
+		"""Release httpx client and browser session. Idempotent."""
+		if self._closed:
+			return
+		self._closed = True
 		if self._browser_session:
 			self._browser_session.close()
 			self._browser_session = None
 		if self._client:
 			self._client.close()
 			self._client = None
+		_OPEN_CLIENTS.discard(self)
 
 	def __enter__(self):
 		return self

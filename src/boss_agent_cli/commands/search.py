@@ -89,72 +89,71 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 
 	try:
 		auth = AuthManager(data_dir, logger=logger)
-		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
-
-		max_pages = 5 if welfare_conditions else 1
-		pipeline_result = run_search_pipeline(
-			client, cache, logger,
-			criteria=criteria,
-			start_page=page,
-			max_pages=max_pages,
-			welfare_conditions=welfare_conditions,
-		)
-		items = pipeline_result.items
-		save_index(data_dir, items, source=f"search:{query}")
-
-		# Emit search_completed hook
-		hooks = ctx.obj.get("hooks")
-		if hooks:
-			hooks.search_completed.call({
-				"query": query,
-				"page": page,
-				"result_count": len(items),
-				"stats": {
-					"pages_scanned": pipeline_result.stats.pages_scanned,
-					"jobs_seen": pipeline_result.stats.jobs_seen,
-					"jobs_prefiltered": pipeline_result.stats.jobs_prefiltered,
-					"detail_checks": pipeline_result.stats.detail_checks,
-				},
-				"source": "search",
-			})
-
-		pagination = {
-			"page": page,
-			"has_more": pipeline_result.has_more,
-			"total": pipeline_result.total or len(items),
-		}
-		hints = {
-			"next_actions": [
-				"使用 boss detail <security_id> 查看职位详情",
-				"使用 boss greet <security_id> <job_id> 打招呼",
-			],
-		}
-		if pipeline_result.has_more and not welfare_conditions:
-			hints["next_actions"].append(
-				f"使用 boss search <query> --page {page + 1} 查看下一页"
+		with BossClient(auth, delay=delay, cdp_url=cdp_url) as client:
+			max_pages = 5 if welfare_conditions else 1
+			pipeline_result = run_search_pipeline(
+				client, cache, logger,
+				criteria=criteria,
+				start_page=page,
+				max_pages=max_pages,
+				welfare_conditions=welfare_conditions,
 			)
+			items = pipeline_result.items
+			save_index(data_dir, items, source=f"search:{query}")
 
-		# 缓存普通搜索结果
-		if not welfare_conditions:
-			search_params = {
-				"query": query, "city": city, "salary": salary,
-				"experience": experience, "education": education,
-				"industry": industry, "scale": scale, "stage": stage,
-				"job_type": job_type, "page": page,
+			# Emit search_completed hook
+			hooks = ctx.obj.get("hooks")
+			if hooks:
+				hooks.search_completed.call({
+					"query": query,
+					"page": page,
+					"result_count": len(items),
+					"stats": {
+						"pages_scanned": pipeline_result.stats.pages_scanned,
+						"jobs_seen": pipeline_result.stats.jobs_seen,
+						"jobs_prefiltered": pipeline_result.stats.jobs_prefiltered,
+						"detail_checks": pipeline_result.stats.detail_checks,
+					},
+					"source": "search",
+				})
+
+			pagination = {
+				"page": page,
+				"has_more": pipeline_result.has_more,
+				"total": pipeline_result.total or len(items),
 			}
-			cache_data = {"data": items, "pagination": pagination, "hints": hints}
-			cache.put_search(search_params, json.dumps(cache_data, ensure_ascii=False))
+			hints = {
+				"next_actions": [
+					"使用 boss detail <security_id> 查看职位详情",
+					"使用 boss greet <security_id> <job_id> 打招呼",
+				],
+			}
+			if pipeline_result.has_more and not welfare_conditions:
+				hints["next_actions"].append(
+					f"使用 boss search <query> --page {page + 1} 查看下一页"
+				)
 
-		title_suffix = " (welfare filter)" if welfare_conditions else ""
-		handle_output(
-			ctx, "search", items,
-			render=lambda data: render_job_table(
-				data, f"search: {query}{title_suffix}",
-				page=page,
-				hint_next=f"more: boss search \"{query}\" --page {page + 1}" if pipeline_result.has_more and not welfare_conditions else "",
-			),
-			pagination=pagination, hints=hints,
-		)
+			# 缓存普通搜索结果
+			if not welfare_conditions:
+				search_params = {
+					"query": query, "city": city, "salary": salary,
+					"experience": experience, "education": education,
+					"industry": industry, "scale": scale, "stage": stage,
+					"job_type": job_type, "page": page,
+				}
+				cache_data = {"data": items, "pagination": pagination, "hints": hints}
+				cache.put_search(search_params, json.dumps(cache_data, ensure_ascii=False))
+
+			title_suffix = " (welfare filter)" if welfare_conditions else ""
+			handle_output(
+				ctx, "search", items,
+				render=lambda data: render_job_table(
+					data, f"search: {query}{title_suffix}",
+					page=page,
+					hint_next=f"more: boss search \"{query}\" --page {page + 1}" if pipeline_result.has_more and not welfare_conditions else "",
+				),
+				pagination=pagination, hints=hints,
+			)
 	except AuthRequired:
 		handle_error_output(
 			ctx, "search", code="AUTH_REQUIRED",

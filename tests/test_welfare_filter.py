@@ -27,6 +27,13 @@ def _make_job_raw(job_id="j1", welfare=None, security_id="sec_1"):
 	}
 
 
+def _ctx_mock(mock_cls):
+	instance = mock_cls.return_value
+	instance.__enter__ = lambda self: self
+	instance.__exit__ = lambda self, *a: None
+	return instance
+
+
 @patch("boss_agent_cli.commands.search.save_index")
 @patch("boss_agent_cli.commands.search.CacheStore")
 @patch("boss_agent_cli.commands.search.BossClient")
@@ -35,7 +42,7 @@ def test_welfare_filter_tag_match(mock_auth, mock_client_cls, mock_cache_cls, mo
 	"""福利筛选：标签直接匹配不需要查详情"""
 	mock_cache = mock_cache_cls.return_value
 	mock_cache.is_greeted.return_value = False
-	mock_client = mock_client_cls.return_value
+	mock_client = _ctx_mock(mock_client_cls)
 	mock_client.search_jobs.return_value = {
 		"zpData": {
 			"hasMore": False,
@@ -64,7 +71,7 @@ def test_welfare_filter_detail_fallback(mock_auth, mock_client_cls, mock_cache_c
 	"""福利筛选：标签不够时并行查详情"""
 	mock_cache = mock_cache_cls.return_value
 	mock_cache.is_greeted.return_value = False
-	mock_client = mock_client_cls.return_value
+	mock_client = _ctx_mock(mock_client_cls)
 	mock_client.search_jobs.return_value = {
 		"zpData": {
 			"hasMore": False,

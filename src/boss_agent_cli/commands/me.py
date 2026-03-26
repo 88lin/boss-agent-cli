@@ -19,55 +19,55 @@ def me_cmd(ctx, section, deliver_page):
 
 	try:
 		auth = AuthManager(data_dir, logger=logger)
-		client = BossClient(auth, delay=delay, cdp_url=cdp_url)
-		result = {}
+		with BossClient(auth, delay=delay, cdp_url=cdp_url) as client:
+			result = {}
 
-		sections = [section] if section else ["user", "resume", "expect", "deliver"]
+			sections = [section] if section else ["user", "resume", "expect", "deliver"]
 
-		if "user" in sections:
-			if logger:
-				logger.info("获取用户基本信息...")
-			resp = client.user_info()
-			zp_data = resp.get("zpData", {})
-			result["user"] = {
-				"name": zp_data.get("name", ""),
-				"email": zp_data.get("email", ""),
-				"phone": zp_data.get("phone", ""),
-				"identity": zp_data.get("identity", ""),
-				"avatar": zp_data.get("tinyAvatar", ""),
-			}
+			if "user" in sections:
+				if logger:
+					logger.info("获取用户基本信息...")
+				resp = client.user_info()
+				zp_data = resp.get("zpData", {})
+				result["user"] = {
+					"name": zp_data.get("name", ""),
+					"email": zp_data.get("email", ""),
+					"phone": zp_data.get("phone", ""),
+					"identity": zp_data.get("identity", ""),
+					"avatar": zp_data.get("tinyAvatar", ""),
+				}
 
-		if "resume" in sections:
-			if logger:
-				logger.info("获取简历基本信息...")
-			resp = client.resume_baseinfo()
-			zp_data = resp.get("zpData", {})
-			result["resume"] = zp_data
+			if "resume" in sections:
+				if logger:
+					logger.info("获取简历基本信息...")
+				resp = client.resume_baseinfo()
+				zp_data = resp.get("zpData", {})
+				result["resume"] = zp_data
 
-		if "expect" in sections:
-			if logger:
-				logger.info("获取求职期望...")
-			resp = client.resume_expect()
-			zp_data = resp.get("zpData", {})
-			result["expect"] = zp_data
+			if "expect" in sections:
+				if logger:
+					logger.info("获取求职期望...")
+				resp = client.resume_expect()
+				zp_data = resp.get("zpData", {})
+				result["expect"] = zp_data
 
-		if "deliver" in sections:
-			if logger:
-				logger.info("获取投递记录...")
-			resp = client.deliver_list(page=deliver_page)
-			zp_data = resp.get("zpData", {})
-			result["deliver"] = zp_data
+			if "deliver" in sections:
+				if logger:
+					logger.info("获取投递记录...")
+				resp = client.deliver_list(page=deliver_page)
+				zp_data = resp.get("zpData", {})
+				result["deliver"] = zp_data
 
-		handle_output(
-			ctx, "me", result,
-			render=lambda d: render_sectioned_record(d, title="me"),
-			hints={
-				"next_actions": [
-					"boss search <关键词> --city <城市>",
-					"boss recommend",
-				],
-			},
-		)
+			handle_output(
+				ctx, "me", result,
+				render=lambda d: render_sectioned_record(d, title="me"),
+				hints={
+					"next_actions": [
+						"boss search <关键词> --city <城市>",
+						"boss recommend",
+					],
+				},
+			)
 
 	except (AuthRequired, TokenRefreshFailed):
 		handle_error_output(ctx, "me", code="AUTH_REQUIRED", message="未登录", recoverable=True, recovery_action="boss login")
