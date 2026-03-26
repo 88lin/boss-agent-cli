@@ -7,7 +7,7 @@ import click
 from boss_agent_cli.api.client import BossClient
 from boss_agent_cli.api.models import JobItem
 from boss_agent_cli.auth.manager import AuthManager, AuthRequired, TokenRefreshFailed
-from boss_agent_cli.output import emit_error, emit_success
+from boss_agent_cli.display import handle_error_output, handle_output, render_export_summary, render_job_table
 
 
 @click.command("export")
@@ -53,33 +53,43 @@ def export_cmd(ctx, query, city, salary, count, fmt, output):
 
 		if output:
 			_write_to_file(all_items, fmt, output)
-			emit_success("export", {
+			data = {
 				"message": f"已导出 {len(all_items)} 条到 {output}",
 				"count": len(all_items),
 				"format": fmt,
 				"path": output,
-			}, hints={
-				"next_actions": [
-					"boss search <query> — 继续搜索",
-					"boss recommend — 获取个性化推荐",
-				],
-			})
+			}
+			handle_output(
+				ctx, "export", data,
+				render=lambda d: render_export_summary(d),
+				hints={
+					"next_actions": [
+						"boss search <query> — 继续搜索",
+						"boss recommend — 获取个性化推荐",
+					],
+				},
+			)
 		else:
-			emit_success("export", {
+			data = {
 				"count": len(all_items),
 				"format": fmt,
 				"jobs": all_items,
-			}, hints={
-				"next_actions": [
-					"boss export <query> -o file.csv — 导出到文件",
-				],
-			})
+			}
+			handle_output(
+				ctx, "export", data,
+				render=lambda d: render_job_table(d.get("jobs", []), "export"),
+				hints={
+					"next_actions": [
+						"boss export <query> -o file.csv — 导出到文件",
+					],
+				},
+			)
 	except AuthRequired:
-		emit_error("export", code="AUTH_REQUIRED", message="未登录", recoverable=True, recovery_action="boss login")
+		handle_error_output(ctx, "export", code="AUTH_REQUIRED", message="未登录", recoverable=True, recovery_action="boss login")
 	except TokenRefreshFailed:
-		emit_error("export", code="TOKEN_REFRESH_FAILED", message="Token 刷新失败", recoverable=True, recovery_action="boss login")
+		handle_error_output(ctx, "export", code="TOKEN_REFRESH_FAILED", message="Token 刷新失败", recoverable=True, recovery_action="boss login")
 	except Exception as e:
-		emit_error("export", code="NETWORK_ERROR", message=f"导出失败: {e}", recoverable=True, recovery_action="重试")
+		handle_error_output(ctx, "export", code="NETWORK_ERROR", message=f"导出失败: {e}", recoverable=True, recovery_action="重试")
 
 
 def _write_to_file(items: list[dict], fmt: str, path: str):

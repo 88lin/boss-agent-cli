@@ -13,7 +13,12 @@ from boss_agent_cli.api.endpoints import (
 from boss_agent_cli.api.models import JobItem
 from boss_agent_cli.auth.manager import AuthManager, AuthRequired, TokenRefreshFailed
 from boss_agent_cli.cache.store import CacheStore
-from boss_agent_cli.output import emit_error, emit_success
+from boss_agent_cli.display import (
+	handle_error_output,
+	handle_output,
+	render_batch_operation_summary,
+	render_message_panel,
+)
 
 
 @click.command("greet")
@@ -32,11 +37,10 @@ def greet_cmd(ctx, security_id, job_id, message):
 
 	if cache.is_greeted(security_id):
 		cache.close()
-		emit_error(
-			"greet",
+		handle_error_output(
+			ctx, "greet",
 			code="ALREADY_GREETED",
 			message="已向该招聘者打过招呼",
-			recoverable=False,
 			hints={"next_actions": ["boss search <query> — 搜索其他职位"]},
 		)
 		return
@@ -49,42 +53,42 @@ def greet_cmd(ctx, security_id, job_id, message):
 		cache.record_greet(security_id, job_id)
 		cache.close()
 
-		emit_success("greet", {
+		data = {
 			"security_id": security_id,
 			"job_id": job_id,
 			"message": "打招呼成功",
-		}, hints={
+		}
+		hints = {
 			"next_actions": [
 				"boss search <query> — 继续搜索其他职位",
 				"boss recommend — 获取个性化推荐",
 			],
-		})
+		}
+		handle_output(
+			ctx, "greet", data,
+			render=lambda d: render_message_panel(d, title="greet"),
+			hints=hints,
+		)
 	except AuthRequired:
 		cache.close()
-		emit_error(
-			"greet",
-			code="AUTH_REQUIRED",
+		handle_error_output(
+			ctx, "greet", code="AUTH_REQUIRED",
 			message="未登录，请先执行 boss login",
-			recoverable=True,
-			recovery_action="boss login",
+			recoverable=True, recovery_action="boss login",
 		)
 	except TokenRefreshFailed:
 		cache.close()
-		emit_error(
-			"greet",
-			code="TOKEN_REFRESH_FAILED",
+		handle_error_output(
+			ctx, "greet", code="TOKEN_REFRESH_FAILED",
 			message="Token 刷新失败，请重新登录",
-			recoverable=True,
-			recovery_action="boss login",
+			recoverable=True, recovery_action="boss login",
 		)
 	except Exception as e:
 		cache.close()
-		emit_error(
-			"greet",
-			code="NETWORK_ERROR",
+		handle_error_output(
+			ctx, "greet", code="NETWORK_ERROR",
 			message=f"打招呼失败: {e}",
-			recoverable=True,
-			recovery_action="重试",
+			recoverable=True, recovery_action="重试",
 		)
 
 
@@ -135,11 +139,14 @@ def batch_greet_cmd(ctx, query, city, salary, experience, education, industry, s
 		if dry_run:
 			items = [item.to_dict() for item in candidates]
 			cache.close()
-			emit_success("batch-greet", {
-				"dry_run": True,
-				"candidates": items,
-				"count": len(items),
-			})
+			handle_output(
+				ctx, "batch-greet", {
+					"dry_run": True,
+					"candidates": items,
+					"count": len(items),
+				},
+				render=lambda d: render_batch_operation_summary(d, title="batch-greet"),
+			)
 			return
 
 		results = []
@@ -203,31 +210,28 @@ def batch_greet_cmd(ctx, query, city, salary, experience, education, industry, s
 		if stopped_reason:
 			data["stopped_reason"] = stopped_reason
 
-		emit_success("batch-greet", data)
+		handle_output(
+			ctx, "batch-greet", data,
+			render=lambda d: render_batch_operation_summary(d, title="batch-greet"),
+		)
 	except AuthRequired:
 		cache.close()
-		emit_error(
-			"batch-greet",
-			code="AUTH_REQUIRED",
+		handle_error_output(
+			ctx, "batch-greet", code="AUTH_REQUIRED",
 			message="未登录，请先执行 boss login",
-			recoverable=True,
-			recovery_action="boss login",
+			recoverable=True, recovery_action="boss login",
 		)
 	except TokenRefreshFailed:
 		cache.close()
-		emit_error(
-			"batch-greet",
-			code="TOKEN_REFRESH_FAILED",
+		handle_error_output(
+			ctx, "batch-greet", code="TOKEN_REFRESH_FAILED",
 			message="Token 刷新失败，请重新登录",
-			recoverable=True,
-			recovery_action="boss login",
+			recoverable=True, recovery_action="boss login",
 		)
 	except Exception as e:
 		cache.close()
-		emit_error(
-			"batch-greet",
-			code="NETWORK_ERROR",
+		handle_error_output(
+			ctx, "batch-greet", code="NETWORK_ERROR",
 			message=f"批量打招呼失败: {e}",
-			recoverable=True,
-			recovery_action="重试",
+			recoverable=True, recovery_action="重试",
 		)

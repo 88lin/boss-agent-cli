@@ -2,7 +2,7 @@ import click
 
 from boss_agent_cli.api.client import AuthError, BossClient
 from boss_agent_cli.auth.manager import AuthManager, AuthRequired, TokenRefreshFailed
-from boss_agent_cli.output import emit_error, emit_success
+from boss_agent_cli.display import handle_error_output, handle_output, render_sectioned_record
 
 
 @click.command("me")
@@ -58,16 +58,20 @@ def me_cmd(ctx, section, deliver_page):
 			zp_data = resp.get("zpData", {})
 			result["deliver"] = zp_data
 
-		emit_success("me", result, hints={
-			"next_actions": [
-				"boss search <关键词> --city <城市>",
-				"boss recommend",
-			],
-		})
+		handle_output(
+			ctx, "me", result,
+			render=lambda d: render_sectioned_record(d, title="me"),
+			hints={
+				"next_actions": [
+					"boss search <关键词> --city <城市>",
+					"boss recommend",
+				],
+			},
+		)
 
 	except (AuthRequired, TokenRefreshFailed):
-		emit_error("me", code="AUTH_REQUIRED", message="未登录", recoverable=True, recovery_action="boss login")
+		handle_error_output(ctx, "me", code="AUTH_REQUIRED", message="未登录", recoverable=True, recovery_action="boss login")
 	except AuthError:
-		emit_error("me", code="AUTH_EXPIRED", message="登录态过期", recoverable=True, recovery_action="boss login")
+		handle_error_output(ctx, "me", code="AUTH_EXPIRED", message="登录态过期", recoverable=True, recovery_action="boss login")
 	except Exception as e:
-		emit_error("me", code="NETWORK_ERROR", message=str(e), recoverable=True, recovery_action="重试")
+		handle_error_output(ctx, "me", code="NETWORK_ERROR", message=str(e), recoverable=True, recovery_action="重试")
