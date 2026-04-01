@@ -66,6 +66,7 @@ class BossClient:
 				user_agent=token.get("user_agent", ""),
 				delay=self._delay,
 				cdp_url=self._cdp_url,
+				logger=getattr(self._auth, '_logger', None),
 			)
 		return self._browser_session
 
@@ -82,49 +83,56 @@ class BossClient:
 
 	# ── httpx request (low-risk ops) ─────────────────────────────────
 
-	def _request(self, method: str, url: str, *, _retry_count: int = 0, **kwargs) -> dict:
-		client = self._get_client()
-		token = self._auth.get_token()
-		stoken = token.get("stoken", "")
+	def _request(self, method: str, url: str, **kwargs) -> dict:
+		"""httpx 请求，循环重试（最多 _MAX_RETRIES 次），替代递归调用。"""
+		for attempt in range(_MAX_RETRIES + 1):
+			client = self._get_client()
+			token = self._auth.get_token()
+			stoken = token.get("stoken", "")
 
-		if method == "GET":
-			params = kwargs.get("params", {})
-			params["__zp_stoken__"] = stoken
-			kwargs["params"] = params
+			if method == "GET":
+				params = kwargs.get("params", {})
+				params["__zp_stoken__"] = stoken
+				kwargs["params"] = params
 
-		self._throttle.wait()
+			self._throttle.wait()
 
-		extra_headers = self._headers_for(url)
-		resp = client.request(method, url, headers=extra_headers, **kwargs)
-		self._throttle.mark()
-		self._merge_cookies(resp)
+			extra_headers = self._headers_for(url)
+			resp = client.request(method, url, headers=extra_headers, **kwargs)
+			self._throttle.mark()
+			self._merge_cookies(resp)
 
-		if resp.status_code == 403 or "安全验证" in resp.text:
-			if _retry_count >= _MAX_RETRIES:
-				raise AuthError("Token 刷新后仍被拒绝，请重新登录")
-			backoff = (2 ** _retry_count) + random.uniform(0.5, 1.5)
-			time.sleep(backoff)
-			self._auth.force_refresh(cdp_url=self._cdp_url)
-			self._client = None
-			return self._request(method, url, _retry_count=_retry_count + 1, **kwargs)
+			# 403 或安全验证 → 刷新 token 重试
+			if resp.status_code == 403 or "安全验证" in resp.text:
+				if attempt >= _MAX_RETRIES:
+					raise AuthError("Token 刷新后仍被拒绝，请重新登录")
+				backoff = (2 ** attempt) + random.uniform(0.5, 1.5)
+				time.sleep(backoff)
+				self._auth.force_refresh(cdp_url=self._cdp_url)
+				self._client = None
+				continue
 
-		resp.raise_for_status()
-		data = resp.json()
-		code = data.get("code")
+			resp.raise_for_status()
+			data = resp.json()
+			code = data.get("code")
 
-		if code == endpoints.CODE_STOKEN_EXPIRED and _retry_count < _MAX_RETRIES:
-			backoff = (2 ** _retry_count) + random.uniform(0.5, 1.5)
-			time.sleep(backoff)
-			self._auth.force_refresh(cdp_url=self._cdp_url)
-			self._client = None
-			return self._request(method, url, _retry_count=_retry_count + 1, **kwargs)
+			# stoken 过期 → 刷新重试
+			if code == endpoints.CODE_STOKEN_EXPIRED and attempt < _MAX_RETRIES:
+				backoff = (2 ** attempt) + random.uniform(0.5, 1.5)
+				time.sleep(backoff)
+				self._auth.force_refresh(cdp_url=self._cdp_url)
+				self._client = None
+				continue
 
-		if code == endpoints.CODE_RATE_LIMITED and _retry_count < _MAX_RETRIES:
-			cooldown = min(60, 10 * (2 ** _retry_count))
-			time.sleep(cooldown)
-			return self._request(method, url, _retry_count=_retry_count + 1, **kwargs)
+			# 频率限制 → 冷却重试
+			if code == endpoints.CODE_RATE_LIMITED and attempt < _MAX_RETRIES:
+				cooldown = min(60, 10 * (2 ** attempt))
+				time.sleep(cooldown)
+				continue
 
-		return data
+			return data
+
+		raise AuthError("请求失败，已达最大重试次数")
 
 	# ── Browser request (high-risk ops) ──────────────────────────────
 
@@ -217,6 +225,22 @@ class BossClient:
 	def job_history(self, page: int = 1) -> dict:
 		params = {"page": page}
 		return self._request("GET", endpoints.JOB_HISTORY_URL, params=params)
+
+	def chat_history(self, gid: str, security_id: str, *, page: int = 1, count: int = 20) -> dict:
+		"""获取与指定好友的聊天消息历史。"""
+		params = {"gid": gid, "securityId": security_id, "page": page, "c": count, "src": 0}
+		return self._request("GET", endpoints.CHAT_HISTORY_URL, params=params)
+
+	def friend_label(self, friend_id: str, label_id: int, friend_source: int = 0, *, remove: bool = False) -> dict:
+		"""添加或移除好友标签。"""
+		url = endpoints.FRIEND_LABEL_DELETE_URL if remove else endpoints.FRIEND_LABEL_ADD_URL
+		params = {"friendId": friend_id, "friendSource": friend_source, "labelId": label_id}
+		return self._request("GET", url, params=params)
+
+	def exchange_contact(self, security_id: str, uid: str, name: str, exchange_type: int = 1) -> dict:
+		"""请求交换联系方式（1=手机, 2=微信）。"""
+		data = {"type": exchange_type, "securityId": security_id, "uniqueId": uid, "name": name}
+		return self._browser_request("POST", endpoints.EXCHANGE_REQUEST_URL, data=data)
 
 	# ── Lifecycle ────────────────────────────────────────────────────
 

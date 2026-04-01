@@ -27,6 +27,11 @@ SCHEMA_DATA = {
 			"args": [],
 			"options": {},
 		},
+		"doctor": {
+			"description": "诊断本地运行环境、依赖、登录条件和网络连通性",
+			"args": [],
+			"options": {},
+		},
 		"search": {
 			"description": "按关键词和筛选条件搜索职位列表",
 			"args": [
@@ -276,6 +281,35 @@ SCHEMA_DATA = {
 					"default": 1,
 					"description": "页码",
 				},
+			},
+		},
+		"chatmsg": {
+			"description": "查看与指定好友的聊天消息历史",
+			"args": [
+				{"name": "security_id", "required": True, "description": "联系人的 security_id（从 chat 命令获取）"},
+			],
+			"options": {
+				"--page": {"type": "int", "default": 1, "description": "页码"},
+				"--count": {"type": "int", "default": 20, "description": "每页消息数量"},
+			},
+		},
+		"mark": {
+			"description": "给联系人添加/移除标签（新招呼/沟通中/已约面/不合适/收藏等）",
+			"args": [
+				{"name": "security_id", "required": True, "description": "联系人的 security_id（从 chat 命令获取）"},
+			],
+			"options": {
+				"--label": {"type": "string", "required": True, "description": "标签名称或 ID", "enum": ["新招呼", "沟通中", "已约面", "已获取简历", "已交换电话", "已交换微信", "不合适", "收藏"]},
+				"--remove": {"type": "boolean", "default": False, "description": "移除标签（默认为添加）"},
+			},
+		},
+		"exchange": {
+			"description": "请求交换联系方式（手机号或微信）",
+			"args": [
+				{"name": "security_id", "required": True, "description": "联系人的 security_id（从 chat 命令获取）"},
+			],
+			"options": {
+				"--type": {"type": "string", "default": "phone", "description": "交换类型", "enum": ["phone", "wechat"]},
 			},
 		},
 		"interviews": {
