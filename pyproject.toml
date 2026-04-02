@@ -45,6 +45,9 @@ dev = [
 	"pytest>=7.0",
 	"ruff>=0.4",
 ]
+bridge = [
+	"aiohttp>=3.9",
+]
 
 [project.scripts]
 boss = "boss_agent_cli.main:cli"
