@@ -6,8 +6,10 @@
 
 搜索职位 · 福利筛选 · 个性化推荐 · 自动打招呼 · 导出数据
 
+[![CI](https://github.com/can4hou6joeng4/boss-agent-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/can4hou6joeng4/boss-agent-cli/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-≥3.10-3776AB?logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![GitHub Release](https://img.shields.io/github/v/release/can4hou6joeng4/boss-agent-cli)](https://github.com/can4hou6joeng4/boss-agent-cli/releases)
 
 [English](#features) · [安装](#安装) · [快速开始](#快速开始) · [AI Agent 集成](#ai-agent-集成) · [命令参考](#命令参考)
 
