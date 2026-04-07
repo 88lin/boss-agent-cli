@@ -20,19 +20,18 @@ def detail_cmd(ctx, security_id, lid, job_id):
 	cdp_url = ctx.obj.get("cdp_url")
 
 	auth = AuthManager(data_dir, logger=logger)
-	client = BossClient(auth, delay=delay, cdp_url=cdp_url)
+	with BossClient(auth, delay=delay, cdp_url=cdp_url) as client:
+		# 优先走 httpx 快速通道：显式传入 > 缓存查找 > 降级浏览器通道
+		if not job_id:
+			with CacheStore(data_dir / "cache" / "boss_agent.db") as cache:
+				job_id = cache.get_job_id(security_id) or ""
+			if job_id:
+				logger.info("从缓存命中 job_id，走 httpx 快速通道")
 
-	# 优先走 httpx 快速通道：显式传入 > 缓存查找 > 降级浏览器通道
-	if not job_id:
-		with CacheStore(data_dir / "cache" / "boss_agent.db") as cache:
-			job_id = cache.get_job_id(security_id) or ""
 		if job_id:
-			logger.info(f"从缓存命中 job_id，走 httpx 快速通道")
-
-	if job_id:
-		result = _detail_via_httpx(client, security_id, job_id, data_dir)
-	else:
-		result = _detail_via_browser(client, security_id, lid, data_dir)
+			result = _detail_via_httpx(client, security_id, job_id, data_dir)
+		else:
+			result = _detail_via_browser(client, security_id, lid, data_dir)
 
 	if result is None:
 		handle_error_output(

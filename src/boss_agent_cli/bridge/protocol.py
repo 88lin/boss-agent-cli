@@ -1,9 +1,8 @@
 """Browser Bridge 协议定义 — daemon / 扩展 / CLI 三方共享。"""
 
-from dataclasses import dataclass, field
-from typing import Any
 import os
-import time
+from dataclasses import dataclass
+from typing import Any
 
 # ── 端口配置 ──────────────────────────────────────────────────────────
 

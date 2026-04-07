@@ -7,9 +7,7 @@ Supports two modes:
   1. CDP mode (preferred): connects to user's existing Chrome via DevTools Protocol
   2. Patchright mode (fallback): launches a headless Chromium instance
 """
-import random
 import sys
-import time
 from pathlib import Path
 
 from patchright.sync_api import sync_playwright

@@ -40,6 +40,17 @@ def save_index(data_dir: Path, jobs: list[dict], source: str = "search") -> None
 	path.write_text(json.dumps(cache_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def try_save_index(data_dir: Path, jobs: list[dict], *, source: str = "search", logger=None) -> bool:
+	"""Best-effort 保存索引缓存，失败时记录 warning，不影响主命令成功返回。"""
+	try:
+		save_index(data_dir, jobs, source=source)
+		return True
+	except OSError as e:
+		if logger:
+			logger.warning(f"索引缓存写入失败，已跳过: {e}")
+		return False
+
+
 def get_job_by_index(data_dir: Path, index: int) -> dict | None:
 	"""按 1-based 编号获取缓存的职位信息。"""
 	path = _cache_path(data_dir)

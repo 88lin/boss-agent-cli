@@ -1,5 +1,5 @@
 from boss_agent_cli.api.endpoints import CITY_CODES, SALARY_CODES, EXPERIENCE_CODES
-from boss_agent_cli.api.models import JobItem, JobDetail
+from boss_agent_cli.api.models import JobItem
 
 
 def test_city_code_lookup():

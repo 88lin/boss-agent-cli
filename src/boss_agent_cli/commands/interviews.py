@@ -26,9 +26,9 @@ def interviews_cmd(ctx):
 		)
 		return
 
-	client = BossClient(auth, delay=delay, cdp_url=cdp_url)
-	raw = client.interview_data()
-	interview_list = raw.get("zpData", {}).get("interviewList", [])
+	with BossClient(auth, delay=delay, cdp_url=cdp_url) as client:
+		raw = client.interview_data()
+		interview_list = raw.get("zpData", {}).get("interviewList", [])
 
 	items = [
 		{

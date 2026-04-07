@@ -1,10 +1,6 @@
 """Tests for search_filters module — list-page prefiltering and pipeline."""
-import pytest
-
 from boss_agent_cli.search_filters import (
 	SearchFilterCriteria,
-	SearchPipelineResult,
-	SearchPipelineStats,
 	parse_salary_range,
 	meets_experience_threshold,
 	meets_education_threshold,

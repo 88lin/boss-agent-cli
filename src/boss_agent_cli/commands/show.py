@@ -46,8 +46,8 @@ def show_cmd(ctx, index):
 		return
 
 	auth = AuthManager(data_dir, logger=logger)
-	client = BossClient(auth, delay=delay, cdp_url=cdp_url)
-	raw = client.job_card(security_id)
+	with BossClient(auth, delay=delay, cdp_url=cdp_url) as client:
+		raw = client.job_card(security_id)
 
 	card = raw.get("zpData", {}).get("jobCard", {})
 	if not card:
@@ -60,9 +60,8 @@ def show_cmd(ctx, index):
 
 	job_id = card.get("encryptJobId", "")
 
-	cache = CacheStore(data_dir / "cache" / "boss_agent.db")
-	greeted = cache.is_greeted(security_id)
-	cache.close()
+	with CacheStore(data_dir / "cache" / "boss_agent.db") as cache:
+		greeted = cache.is_greeted(security_id)
 
 	result = {
 		"job_id": job_id,

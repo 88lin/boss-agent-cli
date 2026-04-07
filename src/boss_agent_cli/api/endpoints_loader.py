@@ -1,6 +1,6 @@
 """Load API spec from boss.yaml — single source of truth for endpoints, headers, and lookups."""
 import importlib.resources
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import yaml

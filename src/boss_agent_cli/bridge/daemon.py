@@ -185,7 +185,7 @@ async def _run_daemon():
 		ws = web.WebSocketResponse()
 		await ws.prepare(request)
 		ext_ws = ws
-		print(f"[bridge] 扩展已连接", flush=True)
+		print("[bridge] 扩展已连接", flush=True)
 
 		try:
 			async for msg in ws:

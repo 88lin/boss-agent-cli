@@ -18,13 +18,12 @@ def history_cmd(ctx, page):
 	cdp_url = ctx.obj.get("cdp_url")
 
 	auth = AuthManager(data_dir, logger=logger)
-	client = BossClient(auth, delay=delay, cdp_url=cdp_url)
+	with BossClient(auth, delay=delay, cdp_url=cdp_url) as client:
+		raw = client.job_history(page)
+		zp_data = raw.get("zpData", {})
+		job_list = zp_data.get("jobList", [])
 
-	raw = client.job_history(page)
-	zp_data = raw.get("zpData", {})
-	job_list = zp_data.get("jobList", [])
-
-	items = [JobItem.from_api(raw_item).to_dict() for raw_item in job_list]
+		items = [JobItem.from_api(raw_item).to_dict() for raw_item in job_list]
 
 	pagination = {
 		"page": page,

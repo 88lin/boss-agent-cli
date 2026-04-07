@@ -232,6 +232,20 @@ def test_history_success(mock_auth_cls, mock_client_cls):
 	assert parsed["ok"] is True
 
 
+@patch("boss_agent_cli.commands.history.BossClient")
+@patch("boss_agent_cli.commands.history.AuthManager")
+def test_history_uses_client_context_manager(mock_auth_cls, mock_client_cls):
+	instance = mock_client_cls.return_value
+	instance.__enter__ = MagicMock(return_value=instance)
+	instance.__exit__ = MagicMock(return_value=None)
+	instance.job_history.return_value = {"code": 0, "zpData": {"hasMore": False, "jobList": []}}
+	runner = CliRunner()
+	result = runner.invoke(cli, ["history"])
+	assert result.exit_code == 0
+	instance.__enter__.assert_called_once()
+	instance.__exit__.assert_called_once()
+
+
 # ── interviews ───────────────────────────────────────────────────────
 
 
@@ -248,6 +262,76 @@ def test_interviews_success(mock_auth_cls, mock_client_cls):
 	assert result.exit_code == 0
 	parsed = json.loads(result.output)
 	assert parsed["ok"] is True
+
+
+@patch("boss_agent_cli.commands.detail.CacheStore")
+@patch("boss_agent_cli.commands.detail.BossClient")
+@patch("boss_agent_cli.commands.detail.AuthManager")
+def test_detail_uses_client_context_manager(mock_auth_cls, mock_client_cls, mock_cache_cls):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	instance = mock_client_cls.return_value
+	instance.__enter__ = MagicMock(return_value=instance)
+	instance.__exit__ = MagicMock(return_value=None)
+	instance.job_detail.return_value = {
+		"code": 0,
+		"zpData": {
+			"jobInfo": {"jobName": "Go 开发", "salaryDesc": "30K", "experienceName": "3-5年", "degreeName": "本科"},
+			"bossInfo": {"name": "张总", "title": "CTO"},
+			"brandComInfo": {"brandName": "TestCo"},
+		},
+	}
+	runner = CliRunner()
+	result = runner.invoke(cli, ["detail", "sec_001", "--job-id", "enc_001"])
+	assert result.exit_code == 0
+	instance.__enter__.assert_called_once()
+	instance.__exit__.assert_called_once()
+
+
+@patch("boss_agent_cli.commands.show.CacheStore")
+@patch("boss_agent_cli.commands.show.get_job_by_index")
+@patch("boss_agent_cli.commands.show.BossClient")
+@patch("boss_agent_cli.commands.show.AuthManager")
+def test_show_uses_client_context_manager(mock_auth_cls, mock_client_cls, mock_get_job_by_index, mock_cache_cls):
+	mock_get_job_by_index.return_value = {"security_id": "sec_001"}
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	instance = mock_client_cls.return_value
+	instance.__enter__ = MagicMock(return_value=instance)
+	instance.__exit__ = MagicMock(return_value=None)
+	instance.job_card.return_value = {
+		"zpData": {
+			"jobCard": {
+				"encryptJobId": "enc_001",
+				"jobName": "Go 开发",
+				"brandName": "TestCo",
+				"salaryDesc": "30K",
+				"cityName": "北京",
+				"experienceName": "3-5年",
+				"degreeName": "本科",
+			},
+		},
+	}
+	runner = CliRunner()
+	result = runner.invoke(cli, ["show", "1"])
+	assert result.exit_code == 0
+	instance.__enter__.assert_called_once()
+	instance.__exit__.assert_called_once()
+
+
+@patch("boss_agent_cli.commands.interviews.BossClient")
+@patch("boss_agent_cli.commands.interviews.AuthManager")
+def test_interviews_uses_client_context_manager(mock_auth_cls, mock_client_cls):
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {"wt2": "ok"}}
+	instance = mock_client_cls.return_value
+	instance.__enter__ = MagicMock(return_value=instance)
+	instance.__exit__ = MagicMock(return_value=None)
+	instance.interview_data.return_value = {"code": 0, "zpData": {"interviewList": []}}
+	runner = CliRunner()
+	result = runner.invoke(cli, ["interviews"])
+	assert result.exit_code == 0
+	instance.__enter__.assert_called_once()
+	instance.__exit__.assert_called_once()
 
 
 # ── show ─────────────────────────────────────────────────────────────

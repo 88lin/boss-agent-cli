@@ -1,5 +1,5 @@
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from click.testing import CliRunner
 from boss_agent_cli.main import cli
@@ -34,7 +34,7 @@ def _ctx_mock(mock_cls):
 	return instance
 
 
-@patch("boss_agent_cli.commands.search.save_index")
+@patch("boss_agent_cli.commands.search.try_save_index")
 @patch("boss_agent_cli.commands.search.CacheStore")
 @patch("boss_agent_cli.commands.search.BossClient")
 @patch("boss_agent_cli.commands.search.AuthManager")
@@ -63,7 +63,7 @@ def test_welfare_filter_tag_match(mock_auth, mock_client_cls, mock_cache_cls, mo
 	mock_client.job_card.assert_not_called()
 
 
-@patch("boss_agent_cli.commands.search.save_index")
+@patch("boss_agent_cli.commands.search.try_save_index")
 @patch("boss_agent_cli.commands.search.CacheStore")
 @patch("boss_agent_cli.commands.search.BossClient")
 @patch("boss_agent_cli.commands.search.AuthManager")

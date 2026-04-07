@@ -1,5 +1,6 @@
 import json
 from unittest.mock import patch, MagicMock
+from types import SimpleNamespace
 
 from click.testing import CliRunner
 from boss_agent_cli.main import cli
@@ -217,6 +218,86 @@ def test_recommend_success(mock_auth_cls, mock_client_cls, mock_cache_cls):
 	assert parsed["hints"] is not None
 
 
+@patch("boss_agent_cli.index_cache.save_index", side_effect=PermissionError("readonly"))
+@patch("boss_agent_cli.commands.recommend.CacheStore")
+@patch("boss_agent_cli.commands.recommend.BossClient")
+@patch("boss_agent_cli.commands.recommend.AuthManager")
+def test_recommend_ignores_index_cache_write_failure(mock_auth_cls, mock_client_cls, mock_cache_cls, mock_save_index):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.recommend_jobs.return_value = {
+		"zpData": {
+			"hasMore": False,
+			"jobList": [
+				{
+					"encryptJobId": "j1",
+					"jobName": "Go 开发",
+					"brandName": "TestCo",
+					"salaryDesc": "20K",
+					"cityName": "广州",
+					"areaDistrict": "天河区",
+					"jobExperience": "3-5年",
+					"jobDegree": "本科",
+					"skills": ["Golang"],
+					"welfareList": ["五险一金"],
+					"brandIndustry": "互联网",
+					"brandScaleName": "100-499人",
+					"brandStageName": "A轮",
+					"bossName": "李",
+					"bossTitle": "HR",
+					"bossOnline": True,
+					"securityId": "sec_r1",
+				},
+			],
+		},
+	}
+	runner = CliRunner()
+	result = runner.invoke(cli, ["recommend"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	mock_save_index.assert_called_once()
+
+
+@patch("boss_agent_cli.index_cache.save_index", side_effect=PermissionError("readonly"))
+@patch("boss_agent_cli.commands.search.run_search_pipeline")
+@patch("boss_agent_cli.commands.search.CacheStore")
+@patch("boss_agent_cli.commands.search.AuthManager")
+@patch("boss_agent_cli.commands.search.BossClient")
+def test_search_ignores_index_cache_write_failure(mock_client_cls, mock_auth_cls, mock_cache_cls, mock_pipeline, mock_save_index):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.get_search.return_value = None
+	_ctx_mock(mock_client_cls)
+	mock_pipeline.return_value = SimpleNamespace(
+		items=[{
+			"job_id": "j1",
+			"title": "Go 开发",
+			"company": "TestCo",
+			"salary": "20K",
+			"city": "广州",
+			"experience": "3-5年",
+			"education": "本科",
+			"security_id": "sec_001",
+			"greeted": False,
+		}],
+		has_more=False,
+		total=1,
+		stats=SimpleNamespace(
+			pages_scanned=1,
+			jobs_seen=1,
+			jobs_prefiltered=0,
+			detail_checks=0,
+		),
+	)
+	runner = CliRunner()
+	result = runner.invoke(cli, ["search", "golang"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	mock_save_index.assert_called_once()
+
+
 @patch("boss_agent_cli.commands.export.BossClient")
 @patch("boss_agent_cli.commands.export.AuthManager")
 def test_export_to_stdout(mock_auth_cls, mock_client_cls):
@@ -387,7 +468,6 @@ def test_chat_export_md(mock_auth_cls, mock_client_cls, tmp_path):
 	assert "BOSS 直聘沟通列表" in content
 	assert "对方主动" in content
 	# 快照应已保存
-	import os
 	snapshot_dir = tmp_path / "chat-history"
 	assert snapshot_dir.exists()
 	json_files = list(snapshot_dir.glob("*.json"))
@@ -452,7 +532,7 @@ def test_chat_export_json_default_path(mock_auth_cls, mock_client_cls, tmp_path)
 	assert parsed["ok"] is True
 	assert parsed["data"]["format"] == "json"
 	# 文件应已写入 export_dir
-	import os, datetime
+	import datetime
 	today = datetime.date.today().isoformat()
 	expected = export_dir / f"沟通列表-{today}.json"
 	assert expected.exists()
@@ -469,7 +549,7 @@ def test_chat_snapshot_diff(mock_auth_cls, mock_client_cls, tmp_path):
 	now_ms = int(time.time() * 1000)
 
 	# 先手动写入一份"昨天"的快照
-	import os, datetime
+	import datetime
 	snapshot_dir = tmp_path / "chat-history"
 	snapshot_dir.mkdir(parents=True)
 	yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
@@ -610,7 +690,8 @@ def test_snapshot_corrupted_structure(tmp_path):
 @patch("boss_agent_cli.commands.chat.AuthManager")
 def test_chat_snapshot_page_merge(mock_auth_cls, mock_client_cls, tmp_path):
 	"""同天不同页的快照应合并，而非覆盖"""
-	import time, datetime
+	import datetime
+	import time
 	now_ms = int(time.time() * 1000)
 
 	# 模拟第一次 page=1 的快照

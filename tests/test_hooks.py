@@ -1,5 +1,5 @@
 """Tests for hooks module — SyncHook and BailHook."""
-from boss_agent_cli.hooks import SyncHook, BailHook, HookBus, create_hook_bus
+from boss_agent_cli.hooks import SyncHook, BailHook, create_hook_bus
 
 
 class TestSyncHook:

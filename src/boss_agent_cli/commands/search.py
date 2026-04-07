@@ -10,12 +10,10 @@ from boss_agent_cli.api.endpoints import (
 	SCALE_CODES,
 	STAGE_CODES,
 )
-from boss_agent_cli.api.models import JobItem
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.cache.store import CacheStore
 from boss_agent_cli.display import handle_auth_errors, handle_error_output, handle_output, render_job_table
-from boss_agent_cli.index_cache import save_index
-from boss_agent_cli.output import emit_success
+from boss_agent_cli.index_cache import try_save_index
 from boss_agent_cli.search_filters import (
 	SearchFilterCriteria,
 	resolve_welfare_keywords,
@@ -97,7 +95,7 @@ def search_cmd(ctx, query, city, salary, experience, education, industry, scale,
 				welfare_conditions=welfare_conditions,
 			)
 			items = pipeline_result.items
-			save_index(data_dir, items, source=f"search:{query}")
+			try_save_index(data_dir, items, source=f"search:{query}", logger=logger)
 
 			# Emit search_completed hook
 			hooks = ctx.obj.get("hooks")

@@ -1,4 +1,3 @@
-import json
 from unittest.mock import patch
 
 from boss_agent_cli.auth.token_store import TokenStore

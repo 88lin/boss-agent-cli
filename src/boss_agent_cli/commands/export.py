@@ -1,6 +1,5 @@
 import csv
 import html as _html
-import io
 import json
 
 import click

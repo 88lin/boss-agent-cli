@@ -5,7 +5,7 @@ from boss_agent_cli.api.models import JobItem
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.cache.store import CacheStore
 from boss_agent_cli.display import handle_output, render_job_table, handle_auth_errors
-from boss_agent_cli.index_cache import save_index
+from boss_agent_cli.index_cache import try_save_index
 
 
 @click.command("recommend")
@@ -33,7 +33,7 @@ def recommend_cmd(ctx, page):
 				item.greeted = cache.is_greeted(item.security_id)
 				items.append(item.to_dict())
 
-		save_index(data_dir, items, source="recommend")
+		try_save_index(data_dir, items, source="recommend", logger=logger)
 
 		pagination = {
 			"page": page,

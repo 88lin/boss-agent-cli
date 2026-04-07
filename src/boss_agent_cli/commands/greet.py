@@ -64,7 +64,7 @@ def greet_cmd(ctx, security_id, job_id, message):
 					)
 					return
 
-			result = client.greet(security_id, job_id, message)
+			client.greet(security_id, job_id, message)
 
 			cache.record_greet(security_id, job_id)
 
