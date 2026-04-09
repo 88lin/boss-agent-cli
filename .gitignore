@@ -13,3 +13,5 @@ CLAUDE.md
 AGENTS.md
 GEMINI.md
 .ace-tool/
+.agents/skills/
+.trellis/

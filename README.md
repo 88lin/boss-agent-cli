@@ -293,9 +293,23 @@ boss --cdp-url http://localhost:9222 doctor
   "batch_greet_delay": [2.0, 5.0],
   "batch_greet_max": 10,
   "log_level": "error",
-  "login_timeout": 120
+  "login_timeout": 120,
+  "cdp_url": null,
+  "export_dir": null
 }
 ```
+
+| 配置项 | 说明 |
+|--------|------|
+| `default_city` | 搜索时的默认城市 |
+| `default_salary` | 搜索时的默认薪资范围 |
+| `request_delay` | 请求间隔范围（秒），`[min, max]` |
+| `batch_greet_delay` | 批量打招呼间隔范围（秒） |
+| `batch_greet_max` | 批量打招呼上限 |
+| `log_level` | 日志级别（error/warning/info/debug） |
+| `login_timeout` | 登录超时时间（秒） |
+| `cdp_url` | Chrome CDP 地址（如 `http://localhost:9222`） |
+| `export_dir` | 导出文件默认保存目录 |
 
 ## 技术架构
 
