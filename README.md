@@ -29,8 +29,8 @@
 ## 安装
 
 ```bash
-# 安装 CLI 工具
-uv tool install boss-agent-cli
+# 安装 CLI 工具（从 GitHub）
+uv tool install git+https://github.com/can4hou6joeng4/boss-agent-cli.git
 
 # 安装浏览器（用于登录）
 patchright install chromium
