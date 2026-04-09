@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v6
@@ -55,6 +55,9 @@ jobs:
 
       - name: Compile check all modules
         run: uv run python -m compileall src/boss_agent_cli/ -q
+
+      - name: Ruff lint
+        run: uv run ruff check src/
 
       - name: Check critical imports
         run: |
