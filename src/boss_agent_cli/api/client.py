@@ -48,6 +48,12 @@ class BossClient:
 			headers = dict(endpoints.DEFAULT_HEADERS)
 			if ua := token.get("user_agent"):
 				headers["User-Agent"] = ua
+			# 根据运行平台动态设置 sec-ch-ua-platform
+			import sys
+			if sys.platform == "win32":
+				headers["sec-ch-ua-platform"] = '"Windows"'
+			elif sys.platform == "linux":
+				headers["sec-ch-ua-platform"] = '"Linux"'
 			self._client = httpx.Client(
 				base_url=endpoints.BASE_URL,
 				cookies=token.get("cookies", {}),

@@ -92,15 +92,24 @@ patchright install chromium
 
 | 命令 | 用途 | 关键参数 |
 |------|------|----------|
-| `boss schema` | 能力自描述（10 个业务命令） | 无 |
+| `boss schema` | 能力自描述（19 个命令） | 无 |
+| `boss doctor` | 诊断环境、依赖、登录态和网络 | 无 |
 | `boss status` | 检查登录态 | 无 |
-| `boss login` | 登录（Cookie 优先，失败扫码） | `--timeout` `--cookie-source` |
+| `boss login` | 登录（Cookie 优先，失败扫码） | `--timeout` `--cdp` |
+| `boss logout` | 退出登录 | 无 |
 | `boss me` | 我的信息（用户/简历/期望/投递） | `--section` `--deliver-page` |
 | `boss search <query>` | 搜索职位 | `--city` `--salary` `--welfare` `--experience` |
 | `boss recommend` | 个性化推荐 | `--page` |
-| `boss detail <security_id>` | 职位详情 | 无 |
+| `boss detail <security_id>` | 职位详情 | `--job-id` |
+| `boss show <#>` | 按编号查看上次搜索结果 | 无 |
 | `boss greet <sid> <jid>` | 打招呼 | `--message` |
 | `boss batch-greet <query>` | 批量打招呼（上限 10） | `--count` `--dry-run` |
+| `boss chat` | 沟通列表（筛选和导出） | `--from` `--days` `--export` |
+| `boss chatmsg <sid>` | 查看聊天消息历史 | `--page` |
+| `boss mark <sid>` | 联系人标签管理 | `--label` |
+| `boss exchange <sid>` | 请求交换手机或微信 | 无 |
+| `boss interviews` | 面试邀请列表 | 无 |
+| `boss history` | 浏览历史 | 无 |
 | `boss export <query>` | 导出结果 | `--format csv/json` `--output` `--count` |
 | `boss cities` | 列出 40 个支持城市 | 无 |
 

@@ -85,15 +85,14 @@ def start_daemon_background() -> int | None:
 		# Unix: 新会话脱离终端
 		kwargs["start_new_session"] = True
 
-	log_fd = open(_LOG_FILE, "a")
-	proc = subprocess.Popen(
-		[sys.executable, "-m", "boss_agent_cli.bridge.daemon", "--serve"],
-		stdout=log_fd,
-		stderr=log_fd,
-		stdin=subprocess.DEVNULL,
-		**kwargs,
-	)
-	log_fd.close()
+	with open(_LOG_FILE, "a") as log_fd:
+		proc = subprocess.Popen(
+			[sys.executable, "-m", "boss_agent_cli.bridge.daemon", "--serve"],
+			stdout=log_fd,
+			stderr=log_fd,
+			stdin=subprocess.DEVNULL,
+			**kwargs,
+		)
 
 	# 等待 PID 文件出现（daemon 启动后写入）
 	for _ in range(20):
