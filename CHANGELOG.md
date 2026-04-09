@@ -2,7 +2,28 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
-## [1.0.0] - 2026-03-23
+## [1.2.0] - 2026-04-09
+
+### Added
+- CI 新增 ruff lint 质量门禁步骤
+- CI 矩阵新增 Python 3.13 支持
+- 新增 bridge/display/endpoints_loader/index_cache 四模块测试（123→182 用例）
+- SKILL.md 命令速查表补全至 19 个命令
+
+### Changed
+- chat.py 拆分为 chat_export/chat_snapshot/chat_utils 三子模块（655→227 行）
+- 浏览器超时从裸数字提取为命名常量
+- search_filters 异常捕获从 Exception 收窄为具体类型
+- client.py 根据运行平台动态设置请求头
+- daemon.py 文件句柄改为 with 语句防泄漏
+- 安装命令改为从 GitHub 源码安装
+
+### Fixed
+- CLAUDE.md 缩进规范、模块索引、技术栈、架构图与代码对齐
+- README 配置文档补全 cdp_url/export_dir 字段
+- .gitignore 排除 .trellis/.agents 目录
+
+## [1.1.0] - 2026-04-03
 
 首个正式版本发布。
 
