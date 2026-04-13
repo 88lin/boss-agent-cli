@@ -5,7 +5,7 @@
 ## 1) 安装与环境准备
 
 ```bash
-uv tool install git+https://github.com/can4hou6joeng4/boss-agent-cli.git
+uv tool install boss-agent-cli
 patchright install chromium
 boss doctor
 boss login

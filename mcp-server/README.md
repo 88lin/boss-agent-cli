@@ -10,7 +10,7 @@
 
 ```bash
 # 1. 安装 boss CLI
-uv tool install git+https://github.com/can4hou6joeng4/boss-agent-cli.git
+uv tool install boss-agent-cli
 patchright install chromium
 
 # 2. 安装 MCP 依赖

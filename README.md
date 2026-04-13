@@ -17,7 +17,7 @@
 
 </div>
 
-> **English** | A CLI tool designed for AI Agents to interact with [BOSS Zhipin](https://www.zhipin.com/) (China's largest recruitment platform). All output is structured JSON. Supports job search with welfare filtering, auto-greeting, chat export, and anti-detection login via [patchright](https://github.com/nichochar/patchright). Install: `uv tool install git+https://github.com/can4hou6joeng4/boss-agent-cli.git`
+> **English** | A CLI tool designed for AI Agents to interact with [BOSS Zhipin](https://www.zhipin.com/) (China's largest recruitment platform). All output is structured JSON. Supports job search with welfare filtering, auto-greeting, chat export, and anti-detection login via [patchright](https://github.com/nichochar/patchright). Install: `uv tool install boss-agent-cli && patchright install chromium`
 
 ---
 
@@ -36,17 +36,22 @@
 ## 安装
 
 ```bash
-# 安装 CLI 工具（从 GitHub）
-uv tool install git+https://github.com/can4hou6joeng4/boss-agent-cli.git
+# 推荐：通过 uv 安装（秒级，自动隔离）
+uv tool install boss-agent-cli
 
 # 安装浏览器（用于登录）
 patchright install chromium
 ```
 
 <details>
-<summary>从源码安装</summary>
+<summary>其他安装方式</summary>
 
 ```bash
+# pip 安装
+pip install boss-agent-cli
+patchright install chromium
+
+# 从源码安装（开发用）
 git clone https://github.com/can4hou6joeng4/boss-agent-cli.git
 cd boss-agent-cli
 uv sync --all-extras

@@ -41,4 +41,4 @@ jobs:
         if: ${{ !contains(github.ref, 'rc') && !contains(github.ref, 'beta') }}
         run: uv publish
         env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}

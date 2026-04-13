@@ -41,7 +41,7 @@ fi
 运行此 skill 需要 `boss` 命令可用。若不可用，提示用户执行：
 
 ```bash
-uv tool install git+https://github.com/can4hou6joeng4/boss-agent-cli.git
+uv tool install boss-agent-cli
 patchright install chromium
 ```
 
