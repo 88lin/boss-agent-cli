@@ -2,6 +2,7 @@ from pathlib import Path
 
 import click
 
+from boss_agent_cli import __version__
 from boss_agent_cli.commands import schema, login, logout, status, doctor, search, detail, greet, recommend, export, cities, me, chat, chatmsg, chat_summary, mark, exchange, interviews, show, history, watch, pipeline, apply, shortlist, preset, digest
 from boss_agent_cli.config import load_config
 from boss_agent_cli.hooks import create_hook_bus
@@ -9,6 +10,7 @@ from boss_agent_cli.output import Logger
 
 
 @click.group(context_settings={"allow_interspersed_args": False})
+@click.version_option(version=__version__, prog_name="boss")
 @click.option("--data-dir", default="~/.boss-agent", help="数据存储目录")
 @click.option("--delay", default=None, help="请求间隔范围（秒），如 1.5-3.0")
 @click.option("--cdp-url", default=None, help="Chrome CDP 调试地址（如 http://localhost:9222），启用则优先用用户 Chrome")

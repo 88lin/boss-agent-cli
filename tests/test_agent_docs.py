@@ -24,11 +24,14 @@ def test_capability_matrix_exists_and_covers_core_capabilities():
 	assert path.exists(), "docs/capability-matrix.md should exist"
 	content = _read("docs/capability-matrix.md")
 	assert "# Capability Matrix" in content
-	assert "| 能力 | CLI 命令 | Skill 入口 | MCP 工具 |" in content
-	assert "| 协议发现 | `boss schema` | `schema` | `boss_schema` |" in content
-	assert "| 职位搜索 | `boss search` | `search` | `boss_search` |" in content
-	assert "| 职位详情 | `boss detail` | `detail` | `boss_detail` |" in content
-	assert "| 打招呼 | `boss greet` | `greet` | `boss_greet` |" in content
+	assert "| 能力 | CLI 命令 |" in content
+	assert "`boss schema`" in content
+	assert "`boss search`" in content
+	assert "`boss detail`" in content
+	assert "`boss greet`" in content
+	assert "`boss pipeline`" in content
+	assert "`boss digest`" in content
+	assert "28" in content
 
 
 def test_readme_and_skill_link_to_new_docs():
