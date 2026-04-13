@@ -5,8 +5,15 @@
 ## 1) 安装与环境准备
 
 ```bash
-uv tool install boss-agent-cli
+# 推荐方式（三选一）
+uv tool install boss-agent-cli   # uv（秒级，自动隔离）
+pipx install boss-agent-cli      # pipx（隔离环境）
+pip install boss-agent-cli       # pip
+
+# 安装浏览器（用于登录）
 patchright install chromium
+
+# 环境自检 + 登录
 boss doctor
 boss login
 boss status

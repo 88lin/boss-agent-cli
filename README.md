@@ -47,6 +47,10 @@ patchright install chromium
 <summary>其他安装方式</summary>
 
 ```bash
+# pipx 安装（隔离环境）
+pipx install boss-agent-cli
+patchright install chromium
+
 # pip 安装
 pip install boss-agent-cli
 patchright install chromium
