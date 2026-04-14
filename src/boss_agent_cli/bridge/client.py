@@ -36,7 +36,7 @@ class BridgeClient:
 				timeout=2.0,
 			)
 			return resp.status_code == 200
-		except Exception:
+		except (httpx.HTTPError, OSError):
 			return False
 
 	def status(self) -> dict | None:
@@ -49,7 +49,7 @@ class BridgeClient:
 			if resp.status_code == 200:
 				return resp.json()
 			return None
-		except Exception:
+		except (httpx.HTTPError, ValueError, OSError):
 			return None
 
 	def is_extension_connected(self) -> bool:

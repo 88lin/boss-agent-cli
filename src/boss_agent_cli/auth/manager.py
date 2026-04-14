@@ -104,7 +104,7 @@ class AuthManager:
 			)
 			data = resp.json()
 			return data.get("code") == 0
-		except Exception:
+		except (httpx.HTTPError, ValueError, KeyError):
 			return False
 
 	def force_refresh(self, cdp_url: str | None = None) -> None:

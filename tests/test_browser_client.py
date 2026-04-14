@@ -1,5 +1,7 @@
 from unittest.mock import patch, MagicMock
 
+import httpx
+
 from boss_agent_cli.api.browser_client import BrowserSession
 
 
@@ -20,7 +22,7 @@ def test_fetch_ws_url_success():
 
 
 def test_fetch_ws_url_failure():
-	with patch("httpx.get", side_effect=Exception("connection refused")):
+	with patch("httpx.get", side_effect=httpx.ConnectError("connection refused")):
 		ws = BrowserSession._fetch_ws_url("http://127.0.0.1:9222")
 		assert ws is None
 

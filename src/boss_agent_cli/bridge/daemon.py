@@ -150,7 +150,7 @@ async def _run_daemon():
 
 		try:
 			cmd = await request.json()
-		except Exception:
+		except (ValueError, KeyError):
 			return web.json_response(
 				{"id": "", "ok": False, "error": "Invalid JSON"},
 				status=400,
