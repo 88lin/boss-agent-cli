@@ -14,9 +14,9 @@ from patchright.sync_api import sync_playwright
 
 from boss_agent_cli.api import endpoints
 from boss_agent_cli.api.throttle import RequestThrottle
+from boss_agent_cli.auth.browser import _DEFAULT_CDP_URL as CDP_DEFAULT_URL
 
 HOME_URL = "https://www.zhipin.com/"
-CDP_DEFAULT_URL = "http://localhost:9222"
 
 # 超时常量
 _CDP_PROBE_TIMEOUT = 3           # CDP 探测 HTTP 超时（秒）
