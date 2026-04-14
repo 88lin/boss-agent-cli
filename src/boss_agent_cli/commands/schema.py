@@ -395,6 +395,15 @@ SCHEMA_DATA = {
 				"reset": "恢复配置项为默认值",
 			},
 		},
+		"clean": {
+			"description": "清理过期缓存和临时文件",
+			"args": [],
+			"options": {
+				"--dry-run": {"type": "bool", "default": False, "description": "仅预览将清理的内容"},
+				"--all": {"type": "bool", "default": False, "description": "清理全部缓存"},
+				"--days": {"type": "int", "default": 30, "description": "清理超过指定天数的快照和导出"},
+			},
+		},
 	},
 	"global_options": {
 		"--data-dir": {
