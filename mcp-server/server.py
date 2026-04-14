@@ -118,6 +118,142 @@ TOOLS = [
 		description="查看浏览历史",
 		inputSchema={"type": "object", "properties": {}, "required": []},
 	),
+	Tool(
+		name="boss_chatmsg",
+		description="查看与指定好友的聊天消息历史",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"security_id": {"type": "string", "description": "好友的 security_id"},
+				"page": {"type": "integer", "description": "页码", "default": 1},
+			},
+			"required": ["security_id"],
+		},
+	),
+	Tool(
+		name="boss_chat_summary",
+		description="基于聊天历史生成结构化摘要与下一步建议",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"security_id": {"type": "string", "description": "好友的 security_id"},
+			},
+			"required": ["security_id"],
+		},
+	),
+	Tool(
+		name="boss_mark",
+		description="给联系人添加或移除标签（新招呼/沟通中/已约面/不合适/收藏等）",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"security_id": {"type": "string", "description": "联系人的 security_id"},
+				"tag": {"type": "string", "description": "标签名称"},
+				"remove": {"type": "boolean", "description": "是否移除标签", "default": False},
+			},
+			"required": ["security_id", "tag"],
+		},
+	),
+	Tool(
+		name="boss_exchange",
+		description="请求交换联系方式（手机号或微信）",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"security_id": {"type": "string", "description": "联系人的 security_id"},
+			},
+			"required": ["security_id"],
+		},
+	),
+	Tool(
+		name="boss_apply",
+		description="发起投递或立即沟通动作（幂等，不会重复投递）",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"security_id": {"type": "string", "description": "职位的 security_id"},
+				"job_id": {"type": "string", "description": "职位的 encrypt_job_id"},
+			},
+			"required": ["security_id", "job_id"],
+		},
+	),
+	Tool(
+		name="boss_batch_greet",
+		description="搜索后批量打招呼（上限 10）",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"query": {"type": "string", "description": "搜索关键词"},
+				"city": {"type": "string", "description": "城市名称"},
+				"limit": {"type": "integer", "description": "最大打招呼数量", "default": 5},
+				"dry_run": {"type": "boolean", "description": "预览模式", "default": False},
+			},
+			"required": ["query"],
+		},
+	),
+	Tool(
+		name="boss_show",
+		description="按编号快速查看上次搜索或推荐结果中的职位详情",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"number": {"type": "integer", "description": "职位编号（从搜索结果中获取）"},
+			},
+			"required": ["number"],
+		},
+	),
+	Tool(
+		name="boss_pipeline",
+		description="聚合聊天和面试数据，生成统一候选进度视图",
+		inputSchema={"type": "object", "properties": {}, "required": []},
+	),
+	Tool(
+		name="boss_follow_up",
+		description="筛出需要优先跟进的候选项（未读、超时未推进、面试）",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"days_stale": {"type": "integer", "description": "超过 N 天未推进视为待跟进", "default": 3},
+			},
+			"required": [],
+		},
+	),
+	Tool(
+		name="boss_digest",
+		description="汇总新增职位、待跟进会话和面试项的只读日报",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"days_stale": {"type": "integer", "description": "超过 N 天未推进视为待跟进", "default": 3},
+			},
+			"required": [],
+		},
+	),
+	Tool(
+		name="boss_config",
+		description="查看和修改配置项",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"action": {"type": "string", "enum": ["list", "get", "set", "reset"], "description": "操作类型"},
+				"key": {"type": "string", "description": "配置项名称"},
+				"value": {"type": "string", "description": "配置值（仅 set 时需要）"},
+			},
+			"required": ["action"],
+		},
+	),
+	Tool(
+		name="boss_clean",
+		description="清理过期缓存和临时文件",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"dry_run": {"type": "boolean", "description": "仅预览不删除", "default": False},
+				"all": {"type": "boolean", "description": "全量清理", "default": False},
+			},
+			"required": [],
+		},
+	),
 ]
 
 
@@ -181,7 +317,70 @@ def _build_args(tool_name: str, arguments: dict) -> list[str]:
 			args.extend(["--section", arguments["section"]])
 		return args
 
-	# 无参数命令：status, doctor, cities, interviews, history
+	if name == "chatmsg":
+		args = [name, arguments["security_id"]]
+		if "page" in arguments:
+			args.extend(["--page", str(arguments["page"])])
+		return args
+
+	if name == "chat_summary":
+		return ["chat-summary", arguments["security_id"]]
+
+	if name == "mark":
+		args = [name, arguments["security_id"], "--tag", arguments["tag"]]
+		if arguments.get("remove"):
+			args.append("--remove")
+		return args
+
+	if name == "exchange":
+		return [name, arguments["security_id"]]
+
+	if name == "apply":
+		return [name, arguments["security_id"], arguments["job_id"]]
+
+	if name == "batch_greet":
+		args = ["batch-greet", arguments["query"]]
+		if "city" in arguments and arguments["city"]:
+			args.extend(["--city", arguments["city"]])
+		if "limit" in arguments:
+			args.extend(["--limit", str(arguments["limit"])])
+		if arguments.get("dry_run"):
+			args.append("--dry-run")
+		return args
+
+	if name == "show":
+		return [name, str(arguments["number"])]
+
+	if name == "follow_up":
+		args = ["follow-up"]
+		if "days_stale" in arguments:
+			args.extend(["--days-stale", str(arguments["days_stale"])])
+		return args
+
+	if name == "config":
+		action = arguments.get("action", "list")
+		args = [name, action]
+		if action in ("get", "set", "reset") and "key" in arguments:
+			args.append(arguments["key"])
+		if action == "set" and "value" in arguments:
+			args.append(arguments["value"])
+		return args
+
+	if name == "clean":
+		args = [name]
+		if arguments.get("dry_run"):
+			args.append("--dry-run")
+		if arguments.get("all"):
+			args.append("--all")
+		return args
+
+	if name == "digest":
+		args = [name]
+		if "days_stale" in arguments:
+			args.extend(["--days-stale", str(arguments["days_stale"])])
+		return args
+
+	# 无参数命令：status, doctor, cities, interviews, history, pipeline
 	return [name]
 
 

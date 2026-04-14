@@ -59,9 +59,20 @@ def test_tool_names_follow_convention():
 def test_required_tools_present():
 	"""核心工具应存在。"""
 	names = {t.name for t in TOOLS}
-	required = {"boss_status", "boss_doctor", "boss_search", "boss_detail", "boss_greet", "boss_chat", "boss_me", "boss_cities"}
+	required = {
+		"boss_status", "boss_doctor", "boss_search", "boss_detail",
+		"boss_greet", "boss_chat", "boss_me", "boss_cities",
+		"boss_chatmsg", "boss_chat_summary", "boss_mark", "boss_exchange",
+		"boss_apply", "boss_batch_greet", "boss_show", "boss_pipeline",
+		"boss_follow_up", "boss_digest", "boss_config", "boss_clean",
+	}
 	missing = required - names
 	assert not missing, f"缺少核心工具: {missing}"
+
+
+def test_tool_count():
+	"""工具总数应与当前注册一致。"""
+	assert len(TOOLS) >= 23
 
 
 def test_search_tool_requires_query():
@@ -181,6 +192,79 @@ def test_build_args_me_no_section():
 def test_build_args_me_with_section():
 	args = _build_args("boss_me", {"section": "resume"})
 	assert args == ["me", "--section", "resume"]
+
+
+# ── 新增工具参数构建 ────────────────────────────────────────────────
+
+
+def test_build_args_chatmsg():
+	args = _build_args("boss_chatmsg", {"security_id": "s1", "page": 2})
+	assert args == ["chatmsg", "s1", "--page", "2"]
+
+
+def test_build_args_chat_summary():
+	args = _build_args("boss_chat_summary", {"security_id": "s1"})
+	assert args == ["chat-summary", "s1"]
+
+
+def test_build_args_mark():
+	args = _build_args("boss_mark", {"security_id": "s1", "tag": "收藏"})
+	assert args == ["mark", "s1", "--tag", "收藏"]
+
+
+def test_build_args_mark_remove():
+	args = _build_args("boss_mark", {"security_id": "s1", "tag": "收藏", "remove": True})
+	assert "--remove" in args
+
+
+def test_build_args_exchange():
+	assert _build_args("boss_exchange", {"security_id": "s1"}) == ["exchange", "s1"]
+
+
+def test_build_args_apply():
+	assert _build_args("boss_apply", {"security_id": "s1", "job_id": "j1"}) == ["apply", "s1", "j1"]
+
+
+def test_build_args_batch_greet():
+	args = _build_args("boss_batch_greet", {"query": "python", "limit": 3, "dry_run": True})
+	assert "batch-greet" in args
+	assert "python" in args
+	assert "--limit" in args
+	assert "--dry-run" in args
+
+
+def test_build_args_show():
+	assert _build_args("boss_show", {"number": 5}) == ["show", "5"]
+
+
+def test_build_args_pipeline():
+	assert _build_args("boss_pipeline", {}) == ["pipeline"]
+
+
+def test_build_args_follow_up():
+	args = _build_args("boss_follow_up", {"days_stale": 7})
+	assert args == ["follow-up", "--days-stale", "7"]
+
+
+def test_build_args_digest():
+	args = _build_args("boss_digest", {"days_stale": 5})
+	assert args == ["digest", "--days-stale", "5"]
+
+
+def test_build_args_config_list():
+	assert _build_args("boss_config", {"action": "list"}) == ["config", "list"]
+
+
+def test_build_args_config_set():
+	args = _build_args("boss_config", {"action": "set", "key": "log_level", "value": "debug"})
+	assert args == ["config", "set", "log_level", "debug"]
+
+
+def test_build_args_clean():
+	args = _build_args("boss_clean", {"dry_run": True, "all": True})
+	assert "clean" in args
+	assert "--dry-run" in args
+	assert "--all" in args
 
 
 # ── CLI 调用逻辑 ───────────────────────────────────────────────────
