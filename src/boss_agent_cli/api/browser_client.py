@@ -175,7 +175,7 @@ class BrowserSession:
 		try:
 			resp = httpx.get(f"{http_url}/json/version", timeout=_CDP_PROBE_TIMEOUT)
 			return resp.json().get("webSocketDebuggerUrl")
-		except Exception:
+		except (httpx.HTTPError, ValueError, KeyError):
 			return None
 
 	@staticmethod

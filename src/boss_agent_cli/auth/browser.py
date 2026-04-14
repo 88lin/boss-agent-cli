@@ -21,7 +21,7 @@ def probe_cdp(cdp_url: str | None = None) -> str | None:
 	try:
 		resp = httpx.get(f"{base}/json/version", timeout=_CDP_PROBE_TIMEOUT)
 		return resp.json().get("webSocketDebuggerUrl")
-	except Exception:
+	except (httpx.HTTPError, ValueError, KeyError):
 		return None
 
 
