@@ -384,6 +384,17 @@ SCHEMA_DATA = {
 				"--days-stale": {"type": "int", "default": 3, "description": "超过 N 天未推进则视为 follow_up"},
 			},
 		},
+		"config": {
+			"description": "查看和修改配置项（子命令：list/get/set/reset）",
+			"args": [],
+			"options": {},
+			"subcommands": {
+				"list": "显示当前全部配置",
+				"get": "查看单个配置项",
+				"set": "修改配置项",
+				"reset": "恢复配置项为默认值",
+			},
+		},
 	},
 	"global_options": {
 		"--data-dir": {
