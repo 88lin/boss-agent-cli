@@ -49,19 +49,58 @@ pip install mcp
 
 ## 可用工具
 
+### 认证与环境
+
 | 工具 | 说明 |
 |------|------|
 | `boss_status` | 检查登录态 |
 | `boss_doctor` | 诊断环境 |
-| `boss_search` | 搜索职位（支持城市/薪资/福利筛选） |
+| `boss_config` | 查看和修改配置项 |
+| `boss_clean` | 清理过期缓存和临时文件 |
+
+### 职位发现
+
+| 工具 | 说明 |
+|------|------|
+| `boss_search` | 搜索职位（支持城市、薪资、福利筛选） |
 | `boss_recommend` | 个性化推荐 |
 | `boss_detail` | 职位详情 |
-| `boss_greet` | 向招聘者打招呼 |
-| `boss_chat` | 沟通列表 |
-| `boss_me` | 用户信息 |
+| `boss_show` | 按编号查看上次搜索结果中的职位 |
 | `boss_cities` | 城市列表 |
-| `boss_interviews` | 面试邀请 |
 | `boss_history` | 浏览历史 |
+
+### 求职动作
+
+| 工具 | 说明 |
+|------|------|
+| `boss_greet` | 向招聘者打招呼 |
+| `boss_batch_greet` | 搜索后批量打招呼 |
+| `boss_apply` | 发起投递或立即沟通 |
+
+### 沟通管理
+
+| 工具 | 说明 |
+|------|------|
+| `boss_chat` | 沟通列表 |
+| `boss_chatmsg` | 聊天消息历史 |
+| `boss_chat_summary` | 聊天摘要与下一步建议 |
+| `boss_mark` | 联系人标签管理 |
+| `boss_exchange` | 交换联系方式 |
+| `boss_interviews` | 面试邀请 |
+
+### 流程管理
+
+| 工具 | 说明 |
+|------|------|
+| `boss_pipeline` | 候选进度视图 |
+| `boss_follow_up` | 跟进筛选 |
+| `boss_digest` | 日报汇总 |
+
+### 用户信息
+
+| 工具 | 说明 |
+|------|------|
+| `boss_me` | 用户信息（基本信息、简历、求职期望、投递记录） |
 
 ## 使用示例
 

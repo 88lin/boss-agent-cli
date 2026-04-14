@@ -31,7 +31,9 @@ def test_capability_matrix_exists_and_covers_core_capabilities():
 	assert "`boss greet`" in content
 	assert "`boss pipeline`" in content
 	assert "`boss digest`" in content
-	assert "28" in content
+	assert "`boss config`" in content
+	assert "`boss clean`" in content
+	assert "30" in content
 
 
 def test_readme_and_skill_link_to_new_docs():

@@ -11,6 +11,8 @@
 | 退出登录 | `boss logout` | 否 | 本地 |
 | 登录态检查 | `boss status` | 是 | httpx |
 | 环境诊断 | `boss doctor` | 否 | 混合 |
+| 配置管理 | `boss config` | 否 | 本地 |
+| 缓存清理 | `boss clean` | 否 | 本地 |
 
 ## 职位发现
 
@@ -63,4 +65,4 @@
 说明：
 - **通道**：httpx 为直接 API 请求（低风险），浏览器为 CDP/patchright 通道（高风险操作需要真实浏览器指纹）。
 - 若以 CLI 直连为主，优先通过 `boss schema` 进行能力发现与参数校验。
-- 共 28 个命令（含 schema），覆盖完整求职自动化链路。
+- 共 30 个命令（含 schema），覆盖完整求职自动化链路。
