@@ -43,7 +43,7 @@ def qr_login_httpx(*, timeout: int = _DEFAULT_TIMEOUT) -> dict:
 			raise RuntimeError(f"getqrcode 返回为空: {data}")
 
 		# Display QR info for user
-		print(f"[boss] 请使用 BOSS 直聘 App 扫描二维码登录", file=sys.stderr)
+		print("[boss] 请使用 BOSS 直聘 App 扫描二维码登录", file=sys.stderr)
 		print(f"[boss] 二维码 ID: {qr_id}", file=sys.stderr)
 		print(f"[boss] 等待扫码中...（超时 {timeout}s）", file=sys.stderr)
 
@@ -69,7 +69,6 @@ def qr_login_httpx(*, timeout: int = _DEFAULT_TIMEOUT) -> dict:
 				raise RuntimeError("二维码已过期，请重新执行 boss login --qr")
 			# code 0 = not scanned yet, continue polling
 
-			elapsed = int(time.time() + timeout - deadline + timeout)
 			remaining = int(deadline - time.time())
 			if remaining > 0 and remaining % 15 == 0:
 				print(f"[boss] 等待中... 剩余 {remaining}s", file=sys.stderr)
