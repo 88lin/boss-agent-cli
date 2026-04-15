@@ -4,10 +4,10 @@ from boss_agent_cli.output import emit_success
 
 SCHEMA_DATA = {
 	"name": "boss-agent-cli",
-	"description": "BOSS直聘求职工具。支持搜索职位、查看详情、向招聘者打招呼。",
+	"description": "BOSS直聘求职工具。32 个命令覆盖搜索、筛选、打招呼、沟通、流水线、简历优化全流程。",
 	"commands": {
 		"login": {
-			"description": "登录 BOSS 直聘（三级降级：Cookie 提取 → CDP 自动探测 → patchright 扫码）",
+			"description": "登录 BOSS 直聘（四级降级：Cookie 提取 → CDP → QR httpx 扫码 → patchright 扫码）",
 			"args": [],
 			"options": {
 				"--timeout": {
