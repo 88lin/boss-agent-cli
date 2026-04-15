@@ -86,13 +86,44 @@ def test_login_falls_back_to_browser_when_cdp_login_fails(
 
 	manager = AuthManager(tmp_path)
 
-	with patch.object(manager, "_verify_cookie", return_value=False):
+	with patch.object(manager, "_verify_cookie", return_value=False), \
+		patch("boss_agent_cli.auth.manager.qr_login_httpx", side_effect=RuntimeError("qr failed")):
 		result = manager.login(timeout=30)
 
 	mock_login_via_cdp.assert_called_once_with(cdp_url=None, timeout=30)
 	mock_login_via_browser.assert_called_once_with(timeout=30)
 	store.save.assert_called_once_with({"cookies": {"wt2": "browser-cookie"}, "stoken": "browser-token"})
 	assert result["_method"] == "扫码登录"
+
+
+@patch("boss_agent_cli.auth.manager.TokenStore")
+@patch("boss_agent_cli.auth.manager.login_via_browser")
+@patch("boss_agent_cli.auth.manager.probe_cdp")
+@patch("boss_agent_cli.auth.manager.extract_cookies")
+def test_login_uses_qr_httpx_when_cdp_unavailable(
+	mock_extract,
+	mock_probe_cdp,
+	mock_login_via_browser,
+	mock_store_cls,
+	tmp_path,
+):
+	"""Cookie 失败 + CDP 不可用时，应尝试 QR httpx 登录。"""
+	store = _make_store()
+	mock_store_cls.return_value = store
+	mock_extract.return_value = None
+	mock_probe_cdp.return_value = False
+
+	qr_token = {"cookies": {"wt2": "qr-cookie"}, "stoken": "", "user_agent": "ua"}
+
+	manager = AuthManager(tmp_path)
+
+	with patch("boss_agent_cli.auth.manager.qr_login_httpx", return_value=qr_token) as mock_qr:
+		result = manager.login(timeout=30)
+
+	mock_qr.assert_called_once_with(timeout=30)
+	mock_login_via_browser.assert_not_called()
+	store.save.assert_called_once_with(qr_token)
+	assert result["_method"] == "QR httpx 登录"
 
 
 @patch("boss_agent_cli.auth.manager.TokenStore")
