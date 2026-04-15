@@ -289,6 +289,15 @@ class BossClient:
 		data = {"type": exchange_type, "securityId": security_id, "uniqueId": uid, "name": name}
 		return self._browser_request("POST", endpoints.EXCHANGE_REQUEST_URL, data=data)
 
+	def resume_status(self) -> dict:
+		"""查询简历完整度和在线状态。"""
+		return self._request("GET", endpoints.RESUME_STATUS_URL)
+
+	def geek_get_job(self, security_id: str) -> dict:
+		"""查询与某招聘者的互动关系（是否已打招呼等）。"""
+		params = {"securityId": security_id}
+		return self._request("GET", endpoints.GEEK_GET_JOB_URL, params=params)
+
 	# ── Lifecycle ────────────────────────────────────────────────────
 
 	def close(self):
