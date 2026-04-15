@@ -4,34 +4,75 @@
 
 **专为 AI Agent 设计的 BOSS 直聘求职 CLI 工具**
 
-搜索职位 · 福利筛选 · 个性化推荐 · 自动打招呼 · 求职流水线 · 增量监控 · 导出数据
+> 搜索职位 · 福利筛选 · 个性化推荐 · 自动打招呼 · 求职流水线 · 增量监控 · AI 简历优化
 
 [![CI](https://github.com/can4hou6joeng4/boss-agent-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/can4hou6joeng4/boss-agent-cli/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-≥3.10-3776AB?logo=python&logoColor=white)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/can4hou6joeng4/boss-agent-cli)](https://github.com/can4hou6joeng4/boss-agent-cli/releases)
+[![Tests](https://img.shields.io/badge/Tests-666%20passed-brightgreen)](https://github.com/can4hou6joeng4/boss-agent-cli)
 
-[安装](#安装) · [快速开始](#快速开始) · [AI Agent 集成](#ai-agent-集成) · [命令参考](#命令参考)
+[安装](#安装) · [快速开始](#快速开始) · [AI Agent 集成](#ai-agent-集成) · [命令参考](#命令参考) · [技术架构](#技术架构)
 
 <img src="demo.gif" alt="boss-agent-cli 终端演示" width="100%">
 
 </div>
 
-> **English** | A CLI tool designed for AI Agents to interact with [BOSS Zhipin](https://www.zhipin.com/) (China's largest recruitment platform). All output is structured JSON. Supports job search with welfare filtering, auto-greeting, chat export, and anti-detection login via [patchright](https://github.com/nichochar/patchright). Install: `uv tool install boss-agent-cli && patchright install chromium`
+> **English** | A CLI tool designed for AI Agents to interact with [BOSS Zhipin](https://www.zhipin.com/) (China's largest recruitment platform). All output is structured JSON, 32 commands, 4-tier login fallback (cookie → CDP → QR httpx → patchright). Install: `uv tool install boss-agent-cli && patchright install chromium`
 
 ---
 
-## 特性
+## 为什么用 boss-agent-cli？
 
-- **AI Agent 友好** — 所有输出为结构化 JSON，`boss schema` 自描述协议让 Agent 一次调用就理解全部能力
-- **福利精准筛选** — `--welfare "双休,五险一金"` 自动翻页逐个检查职位详情，只返回匹配结果
-- **求职流水线** — `pipeline` / `follow-up` / `digest` 构成完整的求职进度追踪与每日摘要
-- **增量监控** — `watch` 保存搜索条件，定期执行并标出新职位；`shortlist` 管理候选池
-- **搜索预设** — `preset` 保存常用搜索参数组合，一键复用
-- **免扫码登录** — 优先从本地浏览器提取 Cookie（支持 Chrome/Firefox/Edge 等 10+ 浏览器），失败才弹出扫码
-- **反检测登录** — 基于 [patchright](https://github.com/nichochar/patchright)（Playwright 反检测 fork），从二进制层面修补自动化标记
-- **智能反爬** — 高斯分布请求延迟 + 指数退避重试，模拟人类操作节奏
-- **错误自愈** — 每个错误响应包含 `recovery_action`，Agent 可自动修复
+传统求职流程：打开网页 → 搜索 → 翻几十页 → 逐个看详情 → 手动打招呼 → 忘了跟进谁。
+
+**boss-agent-cli 让 AI Agent 替你完成全部操作**：
+
+```bash
+boss search "Golang" --city 广州 --welfare "双休,五险一金"   # Agent 搜索
+boss detail <security_id>                                    # Agent 看详情
+boss greet <security_id> <job_id>                            # Agent 打招呼
+boss pipeline                                                # Agent 追踪进度
+boss digest                                                  # Agent 每日汇报
+```
+
+所有输出为结构化 JSON，Agent 一调用就能理解。
+
+---
+
+## 核心能力
+
+### 求职全链路
+
+| 能力 | 说明 | 命令 |
+|------|------|------|
+| **职位发现** | 关键词搜索 + 福利筛选 + 个性化推荐 | `search` `recommend` |
+| **智能筛选** | `--welfare "双休,五险一金"` 自动翻页逐条匹配 | `search --welfare` |
+| **主动出击** | 单个/批量打招呼、立即沟通投递 | `greet` `batch-greet` `apply` |
+| **进度管理** | 求职流水线 + 跟进提醒 + 每日摘要 | `pipeline` `follow-up` `digest` |
+| **增量监控** | 保存搜索条件、定期执行、标出新职位 | `watch` `shortlist` `preset` |
+| **沟通管理** | 聊天记录、结构化摘要、联系人标签 | `chat` `chatmsg` `chat-summary` `mark` |
+| **AI 优化** | 岗位分析 + 简历润色 + 匹配优化 | `ai analyze-jd` `ai polish` `ai optimize` |
+| **数据导出** | CSV / JSON / HTML / Markdown 多格式 | `export` `chat --export` |
+
+### 四级登录降级
+
+```
+boss login
+  ├─ 1. Cookie 提取 — 从本地 Chrome/Firefox/Edge 等 10+ 浏览器免扫码提取
+  ├─ 2. CDP 登录 — 复用带调试端口的 Chrome，保持真实浏览器指纹
+  ├─ 3. QR httpx 登录 — 纯 HTTP 二维码扫码，无需安装任何浏览器
+  └─ 4. patchright 扫码 — 反检测 Chromium 兜底
+```
+
+### Agent 友好设计
+
+- **自描述协议** — `boss schema` 一次调用返回 32 个命令的完整能力描述
+- **JSON 信封** — 所有 stdout 输出统一 `{ok, data, error, hints}` 格式
+- **错误自愈** — 每个错误包含 `recovery_action`，Agent 可自动修复
+- **智能反爬** — 高斯分布延迟 + 突发惩罚 + stoken 浏览器环境自动生成
+
+---
 
 ## 安装
 
@@ -64,57 +105,15 @@ uv run patchright install chromium
 
 </details>
 
-## 登录链路说明
-
-`boss login` 当前采用三级降级：
-
-1. **Cookie 提取**
-   - 优先尝试从本机浏览器提取 `zhipin.com` Cookie
-   - 适合你已经在 Chrome / Edge / Firefox 中登录过 BOSS 直聘的场景
-2. **CDP 登录**
-   - 若检测到带远程调试端口的 Chrome，则复用用户浏览器完成登录
-   - 适合希望保持浏览器真实指纹、减少额外扫码的场景
-3. **patchright 扫码**
-   - 最后兜底，拉起 patchright Chromium 让你扫码登录
-
-推荐工作流：
-
-```bash
-boss doctor
-boss login
-boss status
-```
-
-### CDP 启动示例
-
-macOS:
-
-```bash
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
-  --remote-debugging-port=9222 \
-  --user-data-dir=/tmp/boss-chrome
-```
-
-Linux:
-
-```bash
-google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/boss-chrome
-```
-
-然后可执行：
-
-```bash
-boss --cdp-url http://localhost:9222 doctor
-boss --cdp-url http://localhost:9222 login --cdp
-```
+---
 
 ## 快速开始
 
 ```bash
-# 0. 先做环境自检（推荐）
+# 0. 环境自检
 boss doctor
 
-# 1. 登录（优先免扫码，失败弹出浏览器）
+# 1. 登录（自动四级降级：Cookie → CDP → QR → patchright）
 boss login
 
 # 2. 验证登录态
@@ -126,31 +125,57 @@ boss search "Golang" --city 广州 --welfare "双休,五险一金"
 # 4. 查看职位详情
 boss detail <security_id>
 
-# 5. 向招聘者打招呼（或发起投递）
+# 5. 向招聘者打招呼 / 发起投递
 boss greet <security_id> <job_id>
 boss apply <security_id> <job_id>
 
 # 6. 获取个性化推荐
 boss recommend
 
-# 7. 导出 50 条搜索结果为 CSV
+# 7. 导出搜索结果
 boss export "Golang" --city 广州 --count 50 -o jobs.csv
 
-# 8. 查看求职流水线和每日摘要
+# 8. 求职流水线 + 每日摘要
 boss pipeline
 boss digest
 
-# 9. 保存搜索条件并监控新职位
+# 9. 增量监控新职位
 boss watch add my-golang "Golang" --city 广州 --welfare "双休"
 boss watch run my-golang
 ```
 
+---
+
+## 登录链路说明
+
+`boss login` 采用四级降级策略，适配不同环境：
+
+| 级别 | 方式 | 适用场景 | 需要浏览器？ |
+|------|------|---------|-------------|
+| 1 | **Cookie 提取** | 已在本机浏览器登录过 BOSS 直聘 | 否 |
+| 2 | **CDP 登录** | 带 `--remote-debugging-port` 的 Chrome | 需要 Chrome |
+| 3 | **QR httpx 登录** | 纯 HTTP 扫码，无需安装浏览器 | 否 |
+| 4 | **patchright 扫码** | 兜底方案 | 需要 Chromium |
+
+### CDP 启动示例
+
+```bash
+# macOS
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 --user-data-dir=/tmp/boss-chrome
+
+# Linux
+google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/boss-chrome
+
+# 使用 CDP 登录
+boss --cdp-url http://localhost:9222 login --cdp
+```
+
+---
+
 ## AI Agent 集成
 
-推荐先阅读：
-- [Agent Quickstart](docs/agent-quickstart.md)
-- [Agent Host Examples](docs/agent-hosts.md)
-- [Capability Matrix](docs/capability-matrix.md)
+推荐先阅读：[Agent Quickstart](docs/agent-quickstart.md) · [Agent Host Examples](docs/agent-hosts.md) · [Capability Matrix](docs/capability-matrix.md)
 
 ### 方式一：Skill 安装（推荐）
 
@@ -175,8 +200,6 @@ npx skills add can4hou6joeng4/boss-agent-cli
 
 ### 输出协议
 
-所有命令输出 JSON 到 stdout：
-
 ```json
 {
   "ok": true,
@@ -196,38 +219,80 @@ npx skills add can4hou6joeng4/boss-agent-cli
 | `exit 0` | 命令成功 (`ok=true`) |
 | `exit 1` | 命令失败 (`ok=false`) |
 
+---
+
 ## 命令参考
+
+### 基础操作
 
 | 命令 | 说明 |
 |------|------|
-| `boss schema` | 输出完整能力描述（Agent 首先调用这个） |
-| `boss login` | 登录（Cookie 提取 → CDP → 扫码三级降级） |
+| `boss schema` | 输出 32 个命令的完整能力描述（Agent 首先调用） |
+| `boss login` | 四级降级登录（Cookie → CDP → QR → patchright） |
 | `boss logout` | 退出登录 |
 | `boss status` | 检查登录态 |
-| `boss doctor` | 诊断本地环境、依赖、登录态和网络 |
+| `boss doctor` | 诊断环境、依赖、登录态、Cookie 完整性和网络 |
 | `boss me` | 我的信息（用户/简历/期望/投递记录） |
+
+### 职位搜索与发现
+
+| 命令 | 说明 |
+|------|------|
 | `boss search <query>` | 搜索职位（支持 `--welfare` 福利筛选和 `--preset` 预设） |
 | `boss recommend` | 个性化推荐 |
 | `boss detail <security_id>` | 职位详情（`--job-id` 走快速通道） |
 | `boss show <#>` | 按编号查看上次搜索结果 |
+| `boss cities` | 列出支持的 40 个城市 |
+
+### 求职动作
+
+| 命令 | 说明 |
+|------|------|
 | `boss greet <sid> <jid>` | 向招聘者打招呼 |
 | `boss batch-greet <query>` | 批量打招呼（上限 10） |
 | `boss apply <sid> <jid>` | 发起投递/立即沟通（幂等，不重复投递） |
+| `boss exchange <sid>` | 请求交换手机/微信 |
+
+### 沟通与跟进
+
+| 命令 | 说明 |
+|------|------|
 | `boss chat` | 沟通列表（支持筛选和导出 html/md/csv/json） |
 | `boss chatmsg <sid>` | 查看聊天消息历史 |
-| `boss chat-summary <sid>` | 沟通摘要（按消息生成结构化摘要） |
+| `boss chat-summary <sid>` | 沟通摘要（阶段/待办/关键事实/风险标记） |
 | `boss mark <sid> --label X` | 联系人标签管理（9 种标签） |
-| `boss exchange <sid>` | 请求交换手机/微信 |
 | `boss interviews` | 面试邀请列表 |
 | `boss history` | 浏览历史 |
+
+### 流水线与监控
+
+| 命令 | 说明 |
+|------|------|
 | `boss pipeline` | 求职流水线（汇总沟通+面试，标记各阶段状态） |
 | `boss follow-up` | 跟进提醒（筛选超时未推进的联系人） |
 | `boss digest` | 每日摘要（综合流水线、跟进、统计） |
 | `boss watch add/list/remove/run` | 搜索订阅与增量监控 |
 | `boss shortlist add/list/remove` | 职位候选池管理 |
-| `boss preset add/list/remove` | 搜索预设管理（保存/复用搜索参数组合） |
+| `boss preset add/list/remove` | 搜索预设管理 |
+
+### 简历与 AI
+
+| 命令 | 说明 |
+|------|------|
+| `boss resume init/list/show/edit/delete/export/import/clone/diff` | 本地简历管理 |
+| `boss ai config` | 配置 AI 服务（OpenAI / Anthropic / 兼容 API） |
+| `boss ai analyze-jd` | 分析岗位要求 |
+| `boss ai polish` | AI 润色简历 |
+| `boss ai optimize` | 针对目标岗位优化简历 |
+| `boss ai suggest` | 获取求职建议 |
+
+### 系统管理
+
+| 命令 | 说明 |
+|------|------|
+| `boss config list/set/reset` | 查看和修改配置 |
+| `boss clean` | 清理过期缓存和临时文件 |
 | `boss export <query>` | 导出搜索结果（CSV / JSON） |
-| `boss cities` | 列出支持的 40 个城市 |
 
 ### 搜索筛选参数
 
@@ -259,52 +324,37 @@ boss search "Golang" --city 广州 --welfare "双休,五险一金,年终奖"
 3. 自动翻页（最多 5 页）直到找到所有匹配结果
 4. 每个结果带 `welfare_match` 字段说明匹配来源
 
-支持的福利关键词：`双休` `五险一金` `年终奖` `餐补` `住房补贴` `定期体检` `股票期权` `加班补助` `带薪年假`
+---
 
 ## 诊断与排障
-
-优先执行：
 
 ```bash
 boss doctor
 ```
 
-典型诊断项：
-- `patchright`：CLI 是否已安装
-- `patchright_chromium`：Chromium 内核是否已安装
-- `cookie_extract`：是否能从本地浏览器提取 zhipin Cookie
-- `auth_session`：本地登录态是否存在、是否可解密
-- `auth_token_quality`：当前登录态质量（是否具备 wt2 / stoken）
-- `cdp`：Chrome 远程调试端口是否可连
-- `network`：是否可访问 `https://www.zhipin.com/`
-- `data_dir`：数据目录是否可写
+诊断项一览：
 
-常见修复动作：
+| 检查项 | 说明 |
+|--------|------|
+| `python` | Python 版本是否 >= 3.10 |
+| `patchright` | CLI 是否已安装 |
+| `patchright_chromium` | Chromium 内核是否已安装 |
+| `cookie_extract` | 是否能从本地浏览器提取 zhipin Cookie |
+| `auth_session` | 本地登录态是否存在、是否可解密 |
+| `auth_token_quality` | 核心凭据质量（wt2 / stoken） |
+| `cookie_completeness` | 辅助凭据完整性（wbg / zp_at） |
+| `cdp` | Chrome 远程调试端口是否可连 |
+| `network` | 是否可访问 zhipin.com |
+
+常见修复：
 
 ```bash
-# 安装浏览器内核
-patchright install chromium
-
-# 清除损坏/旧机器指纹的登录态
-boss logout
-
-# 重新登录
-boss login
-
-# 指定 CDP 地址做诊断
-boss --cdp-url http://localhost:9222 doctor
+patchright install chromium    # 安装浏览器内核
+boss logout && boss login      # 重建登录态
+boss --cdp-url http://localhost:9222 doctor   # CDP 诊断
 ```
 
-如果 `doctor` 中 `auth_session` 显示“session 文件但无法解密/已损坏”，通常意味着：
-- 登录态来自旧机器指纹
-- 或 session 文件已损坏
-
-此时执行 `boss logout && boss login` 即可恢复。
-
-如果 `doctor` 中 `auth_token_quality` 显示：
-- `wt2/stoken 均存在`：登录态完整，可优先执行 `boss status`
-- `wt2 存在，但 stoken 缺失`：通常仍能读取部分信息；若接口失败，再执行 `boss login`
-- `wt2 缺失`：说明关键 Cookie 不完整，建议直接 `boss logout && boss login`
+---
 
 ## 错误处理
 
@@ -314,10 +364,14 @@ boss --cdp-url http://localhost:9222 doctor
 | `AUTH_EXPIRED` | 登录过期 | `boss login` |
 | `RATE_LIMITED` | 频率过高 | 等待后重试 |
 | `TOKEN_REFRESH_FAILED` | Token 刷新失败 | `boss login` |
+| `ACCOUNT_RISK` | 风控拦截 | CDP Chrome 重试 |
 | `INVALID_PARAM` | 参数错误 | 修正参数 |
 | `ALREADY_GREETED` | 已打过招呼 | 跳过 |
 | `GREET_LIMIT` | 今日次数用完 | 告知用户 |
 | `NETWORK_ERROR` | 网络错误 | 重试 |
+| `AI_NOT_CONFIGURED` | AI 未配置 | `boss ai config` |
+
+---
 
 ## 配置
 
@@ -349,22 +403,52 @@ boss --cdp-url http://localhost:9222 doctor
 | `cdp_url` | Chrome CDP 地址（如 `http://localhost:9222`） |
 | `export_dir` | 导出文件默认保存目录 |
 
+运行时修改配置：
+
+```bash
+boss config list            # 查看所有配置
+boss config set default_city 广州   # 设置默认城市
+boss config reset           # 恢复默认
+```
+
+---
+
 ## 技术架构
 
 ```
-CLI (Click)  →  AuthManager  →  patchright (登录/Token刷新)
-                    ↓
-              BossClient (httpx)  →  BOSS 直聘 wapi
-                    ↓
-              CacheStore (SQLite WAL)
-                    ↓
-              output.py  →  JSON 信封  →  stdout
+CLI (Click)
+    │
+    ├── AuthManager ── Cookie 提取 / CDP / QR httpx / patchright
+    │       │
+    │       └── TokenStore (Fernet + PBKDF2 机器绑定加密)
+    │
+    ├── BossClient ── httpx (低风险) + 浏览器 (高风险) 混合通道
+    │       │
+    │       ├── RequestThrottle (高斯延迟 + 突发惩罚)
+    │       ├── BrowserSession (CDP 优先 / Bridge / patchright 降级)
+    │       └── BOSS 直聘 wapi (18+ 端点)
+    │
+    ├── CacheStore (SQLite WAL)
+    │
+    ├── AIService (OpenAI / Anthropic / 兼容 API)
+    │
+    └── output.py → JSON 信封 → stdout
 ```
 
-- **认证**：patchright 反检测浏览器扫码 + browser-cookie3 本地提取
-- **反爬**：高斯分布延迟 + 指数退避 + stoken 浏览器环境生成
-- **缓存**：SQLite WAL 模式，搜索 100 条上限 + 24h TTL
-- **加密**：Fernet 对称加密 + PBKDF2 机器绑定密钥
+| 层级 | 选型 |
+|------|------|
+| 语言 | Python >= 3.10 |
+| CLI | Click |
+| HTTP | httpx |
+| 浏览器 | patchright（Playwright 反检测 fork） |
+| Cookie | browser-cookie3（10+ 浏览器） |
+| 加密 | cryptography (Fernet + PBKDF2) |
+| 数据库 | sqlite3 (WAL 模式) |
+| 渲染 | rich |
+| AI | OpenAI / Anthropic Chat Completions API |
+| 测试 | pytest（666 项） |
+
+---
 
 ## 致谢
 
@@ -373,6 +457,10 @@ CLI (Click)  →  AuthManager  →  patchright (登录/Token刷新)
 - [geekgeekrun](https://github.com/geekgeekrun/geekgeekrun) — 浏览器自动化 + 反检测策略
 - [boss-cli](https://github.com/jackwener/boss-cli) — CLI 结构化输出 + Agent 友好设计
 - [opencli](https://github.com/jackwener/opencli) — Browser Bridge 架构理念
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=can4hou6joeng4/boss-agent-cli&type=Date)](https://star-history.com/#can4hou6joeng4/boss-agent-cli&Date)
 
 ## 许可证
 
