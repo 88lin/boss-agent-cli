@@ -20,6 +20,20 @@ class TestLoadBossApiSpec:
 		assert "detail" in spec.endpoints
 		assert "greet" in spec.endpoints
 
+	def test_resume_status_endpoint(self):
+		spec = load_boss_api_spec()
+		assert "resume_status" in spec.endpoints
+		ep = spec.endpoints["resume_status"]
+		assert ep.method == "GET"
+		assert "resume/status" in ep.url
+
+	def test_geek_get_job_endpoint(self):
+		spec = load_boss_api_spec()
+		assert "geek_get_job" in spec.endpoints
+		ep = spec.endpoints["geek_get_job"]
+		assert ep.method == "GET"
+		assert "geekGetJob" in ep.url
+
 	def test_endpoint_spec_fields(self):
 		spec = load_boss_api_spec()
 		search = spec.endpoints["search"]

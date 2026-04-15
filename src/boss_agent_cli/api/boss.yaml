@@ -90,6 +90,14 @@ endpoints:
     method: POST
     path: "/wapi/zpchat/exchange/request"
     referer: "/web/geek/chat"
+  resume_status:
+    method: GET
+    path: "/wapi/zpgeek/resume/status.json"
+    referer: "/web/geek/resume"
+  geek_get_job:
+    method: GET
+    path: "/wapi/zprelation/interaction/geekGetJob"
+    referer: "/web/geek/chat"
 
 lookups:
   city:
