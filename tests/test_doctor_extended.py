@@ -64,7 +64,7 @@ def _find_check(checks, name):
 
 def test_all_checks_pass(tmp_path):
 	"""所有检查项均为 ok 时 summary 应为 healthy（环境依赖项除外）。"""
-	token = {"cookies": {"wt2": "tok"}, "stoken": "st_ok", "user_agent": "ua"}
+	token = {"cookies": {"wt2": "tok", "wbg": "1", "zp_at": "a"}, "stoken": "st_ok", "user_agent": "ua"}
 	code, parsed = _invoke_doctor(
 		tmp_path,
 		token=token,
@@ -354,3 +354,46 @@ def test_next_actions_suggests_status_when_logged_in(tmp_path):
 	code, parsed = _invoke_doctor(tmp_path, token=token, cdp_ws="ws://x")
 	actions = parsed["hints"]["next_actions"]
 	assert any("boss status" in a for a in actions)
+
+
+# ── Cookie 完整性检查（wbg/zp_at） ─────────────────────────────────
+
+
+def test_cookie_completeness_all_present(tmp_path):
+	"""四个关键 Cookie 全部存在时应报 ok。"""
+	token = {"cookies": {"wt2": "t", "wbg": "1", "zp_at": "a"}, "stoken": "st"}
+	code, parsed = _invoke_doctor(tmp_path, token=token)
+	completeness = _find_check(parsed["data"]["checks"], "cookie_completeness")
+	assert completeness is not None
+	assert completeness["status"] == "ok"
+
+
+def test_cookie_completeness_missing_wbg(tmp_path):
+	"""wbg 缺失时应报 warn。"""
+	token = {"cookies": {"wt2": "t", "zp_at": "a"}, "stoken": "st"}
+	code, parsed = _invoke_doctor(tmp_path, token=token)
+	completeness = _find_check(parsed["data"]["checks"], "cookie_completeness")
+	assert completeness is not None
+	assert completeness["status"] == "warn"
+	assert "wbg" in completeness["detail"]
+
+
+def test_cookie_completeness_missing_zp_at(tmp_path):
+	"""zp_at 缺失时应报 warn。"""
+	token = {"cookies": {"wt2": "t", "wbg": "1"}, "stoken": "st"}
+	code, parsed = _invoke_doctor(tmp_path, token=token)
+	completeness = _find_check(parsed["data"]["checks"], "cookie_completeness")
+	assert completeness is not None
+	assert completeness["status"] == "warn"
+	assert "zp_at" in completeness["detail"]
+
+
+def test_cookie_completeness_both_missing(tmp_path):
+	"""wbg 和 zp_at 均缺失时应报 warn 并列出所有缺失项。"""
+	token = {"cookies": {"wt2": "t"}, "stoken": "st"}
+	code, parsed = _invoke_doctor(tmp_path, token=token)
+	completeness = _find_check(parsed["data"]["checks"], "cookie_completeness")
+	assert completeness is not None
+	assert completeness["status"] == "warn"
+	assert "wbg" in completeness["detail"]
+	assert "zp_at" in completeness["detail"]

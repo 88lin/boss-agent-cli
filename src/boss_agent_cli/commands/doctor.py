@@ -127,6 +127,18 @@ def doctor_cmd(ctx):
 			quality_detail = "登录态无效：wt2/stoken 均缺失"
 			quality_hint = "执行 boss login 建立有效登录态"
 		add_check("auth_token_quality", quality_status, quality_detail, quality_hint)
+		# Cookie 完整性检查（辅助 Cookie）
+		_AUX_COOKIES = ["wbg", "zp_at"]
+		missing_aux = [c for c in _AUX_COOKIES if not cookies.get(c)]
+		if not missing_aux:
+			add_check("cookie_completeness", "ok", "辅助 Cookie 完整：wbg/zp_at 均存在")
+		else:
+			missing_str = "/".join(missing_aux)
+			add_check(
+				"cookie_completeness", "warn",
+				f"辅助 Cookie 缺失：{missing_str}",
+				"部分接口可能受影响；重新登录通常可补全：boss logout && boss login",
+			)
 	else:
 		add_check("auth_token_quality", "warn", "未检测到可评估的登录态", "先运行 boss login，再用 boss doctor / boss status 复查")
 
