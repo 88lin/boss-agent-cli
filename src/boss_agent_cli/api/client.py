@@ -230,8 +230,18 @@ class BossClient:
 		return self._browser_request("POST", endpoints.GREET_URL, data=data)
 
 	def job_card(self, security_id: str, lid: str = "") -> dict:
+		"""httpx 优先 + 浏览器降级获取职位卡片信息。"""
+		try:
+			return self.job_card_httpx(security_id, lid)
+		except Exception:
+			pass
 		params = {"securityId": security_id, "lid": lid}
 		return self._browser_request("GET", endpoints.JOB_CARD_URL, params=params)
+
+	def job_card_httpx(self, security_id: str, lid: str = "") -> dict:
+		"""通过 httpx 通道获取职位卡片信息（低延迟）。"""
+		params = {"securityId": security_id, "lid": lid}
+		return self._request("GET", endpoints.JOB_CARD_URL, params=params)
 
 	# ── Low-risk: httpx channel ──────────────────────────────────────
 

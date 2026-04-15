@@ -140,3 +140,38 @@ def test_account_risk_error_not_raised_on_success():
 	assert result["code"] == 0
 	assert result["zpData"]["jobList"][0]["jobName"] == "test"
 	client.close()
+
+
+def test_job_card_httpx_returns_result():
+	"""job_card_httpx 成功时返回 httpx 通道结果。"""
+	from unittest.mock import MagicMock, patch
+	from boss_agent_cli.api.client import BossClient
+
+	auth = MagicMock()
+	auth.get_token.return_value = {"cookies": {}, "user_agent": "ua", "stoken": "s"}
+	client = BossClient(auth)
+
+	expected = {"code": 0, "zpData": {"jobCard": {"jobName": "Go工程师"}}}
+	with patch.object(client, "_request", return_value=expected) as mock_req:
+		result = client.job_card_httpx("sec123", lid="lid1")
+	assert result == expected
+	mock_req.assert_called_once()
+	client.close()
+
+
+def test_job_card_with_httpx_fallback():
+	"""job_card 先尝试 httpx，失败后降级到浏览器通道。"""
+	from unittest.mock import MagicMock, patch
+	from boss_agent_cli.api.client import BossClient
+
+	auth = MagicMock()
+	auth.get_token.return_value = {"cookies": {}, "user_agent": "ua", "stoken": "s"}
+	client = BossClient(auth)
+
+	browser_result = {"code": 0, "zpData": {"jobCard": {"jobName": "浏览器结果"}}}
+	with patch.object(client, "job_card_httpx", side_effect=Exception("httpx failed")), \
+		patch.object(client, "_browser_request", return_value=browser_result) as mock_browser:
+		result = client.job_card("sec123", lid="lid1")
+	assert result == browser_result
+	mock_browser.assert_called_once()
+	client.close()
