@@ -175,3 +175,37 @@ def test_job_card_with_httpx_fallback():
 	assert result == browser_result
 	mock_browser.assert_called_once()
 	client.close()
+
+
+def test_resume_status_calls_request():
+	"""resume_status 应通过 httpx 通道请求。"""
+	from unittest.mock import MagicMock, patch
+	from boss_agent_cli.api.client import BossClient
+
+	auth = MagicMock()
+	auth.get_token.return_value = {"cookies": {}, "user_agent": "ua", "stoken": "s"}
+	client = BossClient(auth)
+
+	expected = {"code": 0, "zpData": {"resumeStatus": {"completeness": 80}}}
+	with patch.object(client, "_request", return_value=expected) as mock_req:
+		result = client.resume_status()
+	assert result == expected
+	mock_req.assert_called_once()
+	client.close()
+
+
+def test_geek_get_job_calls_request():
+	"""geek_get_job 应通过 httpx 通道请求。"""
+	from unittest.mock import MagicMock, patch
+	from boss_agent_cli.api.client import BossClient
+
+	auth = MagicMock()
+	auth.get_token.return_value = {"cookies": {}, "user_agent": "ua", "stoken": "s"}
+	client = BossClient(auth)
+
+	expected = {"code": 0, "zpData": {"hasJob": True}}
+	with patch.object(client, "_request", return_value=expected) as mock_req:
+		result = client.geek_get_job("sec123")
+	assert result == expected
+	mock_req.assert_called_once()
+	client.close()

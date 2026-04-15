@@ -34,6 +34,12 @@ class TestLoadBossApiSpec:
 		assert ep.method == "GET"
 		assert "geekGetJob" in ep.url
 
+	def test_qr_login_endpoints(self):
+		spec = load_boss_api_spec()
+		for name in ["qr_randkey", "qr_getqrcode", "qr_scan", "qr_scanlogin", "qr_dispatcher"]:
+			assert name in spec.endpoints, f"{name} 端点未定义"
+			assert spec.endpoints[name].method == "GET"
+
 	def test_endpoint_spec_fields(self):
 		spec = load_boss_api_spec()
 		search = spec.endpoints["search"]

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from boss_agent_cli.auth.browser import login_via_browser, login_via_cdp, probe_cdp, refresh_stoken, refresh_stoken_via_cdp
 from boss_agent_cli.auth.cookie_extract import extract_cookies
+from boss_agent_cli.auth.qr_login import qr_login_httpx
 from boss_agent_cli.auth.token_store import TokenStore
 from boss_agent_cli.output import Logger
 
@@ -77,9 +78,20 @@ class AuthManager:
 			except Exception as e:
 				self._logger.info(f"CDP 登录失败（{e}），降级到 patchright")
 		else:
-			self._logger.info("CDP 不可用，降级到 patchright 扫码")
+			self._logger.info("CDP 不可用，尝试 QR 纯 httpx 登录")
 
-		# 第三步：patchright 扫码（兜底）
+		# 第三步：QR 纯 httpx 登录（无需浏览器）
+		try:
+			self._logger.info("尝试 QR 纯 httpx 登录...")
+			token = qr_login_httpx(timeout=timeout)
+			method = "QR httpx 登录"
+			self._store.save(token)
+			self._token = token
+			return {**token, "_method": method}
+		except Exception as e:
+			self._logger.info(f"QR httpx 登录失败（{e}），降级到 patchright")
+
+		# 第四步：patchright 扫码（兜底）
 		token = login_via_browser(timeout=timeout)
 		method = "扫码登录"
 		self._store.save(token)
