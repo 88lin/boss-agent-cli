@@ -38,6 +38,11 @@ FRIEND_LABEL_DELETE_URL = _url("friend_label_delete")
 EXCHANGE_REQUEST_URL = _url("exchange_request")
 RESUME_STATUS_URL = _url("resume_status")
 GEEK_GET_JOB_URL = _url("geek_get_job")
+QR_RANDKEY_URL = _url("qr_randkey")
+QR_GETQRCODE_URL = _url("qr_getqrcode")
+QR_SCAN_URL = _url("qr_scan")
+QR_SCANLOGIN_URL = _url("qr_scanlogin")
+QR_DISPATCHER_URL = _url("qr_dispatcher")
 
 # ── API response codes ──────────────────────────────────────────────
 CODE_SUCCESS = _spec.response_codes.get("success", 0)

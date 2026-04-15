@@ -98,6 +98,26 @@ endpoints:
     method: GET
     path: "/wapi/zprelation/interaction/geekGetJob"
     referer: "/web/geek/chat"
+  qr_randkey:
+    method: GET
+    path: "/wapi/zppassport/captcha/randkey"
+    referer: "/web/user/"
+  qr_getqrcode:
+    method: GET
+    path: "/wapi/zpweixin/qrcode/getqrcode"
+    referer: "/web/user/"
+  qr_scan:
+    method: GET
+    path: "/wapi/zppassport/qrcode/scan"
+    referer: "/web/user/"
+  qr_scanlogin:
+    method: GET
+    path: "/wapi/zppassport/qrcode/scanLogin"
+    referer: "/web/user/"
+  qr_dispatcher:
+    method: GET
+    path: "/wapi/zppassport/qrcode/dispatcher"
+    referer: "/web/user/"
 
 lookups:
   city:
