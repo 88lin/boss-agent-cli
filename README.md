@@ -478,3 +478,7 @@ uv run ruff check src/     # 代码检查
 ## 📑 许可证
 
 [MIT](LICENSE)
+
+## 👭 友情链接
+
+- [LINUX DO - 新的理想型社区](https://linux.do/)
