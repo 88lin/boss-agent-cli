@@ -4,6 +4,13 @@ import click
 
 from boss_agent_cli import __version__
 from boss_agent_cli.commands import schema, login, logout, status, doctor, search, detail, greet, recommend, export, cities, me, chat, chatmsg, chat_summary, mark, exchange, interviews, show, history, watch, pipeline, apply, shortlist, preset, digest, config_cmd, clean, resume_cmd, ai_cmd, stats
+from boss_agent_cli.commands.recruiter import applications as recruiter_applications
+from boss_agent_cli.commands.recruiter import resume as recruiter_resume
+from boss_agent_cli.commands.recruiter import chat as recruiter_chat
+from boss_agent_cli.commands.recruiter import jobs as recruiter_jobs
+from boss_agent_cli.commands.recruiter import candidates as recruiter_candidates
+from boss_agent_cli.commands.recruiter import reply as recruiter_reply
+from boss_agent_cli.commands.recruiter import request_resume as recruiter_request_resume
 from boss_agent_cli.config import load_config
 from boss_agent_cli.hooks import create_hook_bus
 from boss_agent_cli.output import Logger
@@ -16,10 +23,11 @@ from boss_agent_cli.platforms import list_platforms
 @click.option("--delay", default=None, help="请求间隔范围（秒），如 1.5-3.0")
 @click.option("--cdp-url", default=None, help="Chrome CDP 调试地址（如 http://localhost:9222），启用则优先用用户 Chrome")
 @click.option("--platform", "platform_name", default=None, help="指定招聘平台适配器（默认 zhipin，即 BOSS 直聘）")
+@click.option("--role", default=None, type=click.Choice(["candidate", "recruiter"]), help="角色模式：candidate（求职者，默认）/ recruiter（招聘者）")
 @click.option("--log-level", default=None, type=click.Choice(["error", "warning", "info", "debug"]))
 @click.option("--json/--no-json", "json_output", default=False, help="强制 JSON 输出（即使在终端中）")
 @click.pass_context
-def cli(ctx: click.Context, data_dir: str, delay: str | None, cdp_url: str | None, platform_name: str | None, log_level: str | None, json_output: bool) -> None:
+def cli(ctx: click.Context, data_dir: str, delay: str | None, cdp_url: str | None, platform_name: str | None, role: str | None, log_level: str | None, json_output: bool) -> None:
 	ctx.ensure_object(dict)
 	resolved_dir = Path(data_dir).expanduser()
 	resolved_dir.mkdir(parents=True, exist_ok=True)
@@ -47,6 +55,9 @@ def cli(ctx: click.Context, data_dir: str, delay: str | None, cdp_url: str | Non
 			param_hint="--platform",
 		)
 	ctx.obj["platform"] = resolved_platform
+
+	resolved_role = role or cfg.get("role") or "candidate"
+	ctx.obj["role"] = resolved_role
 
 	ctx.obj["config"] = cfg
 	ctx.obj["hooks"] = create_hook_bus()
@@ -85,3 +96,18 @@ cli.add_command(clean.clean_cmd, "clean")
 cli.add_command(resume_cmd.resume_group, "resume")
 cli.add_command(ai_cmd.ai_group, "ai")
 cli.add_command(stats.stats_cmd, "stats")
+
+# Recruiter shortcut: boss hr <subcommand>
+@click.group("hr", help="招聘者模式快捷命令")
+@click.pass_context
+def hr_group(ctx: click.Context) -> None:
+	ctx.obj["role"] = "recruiter"
+
+cli.add_command(hr_group, "hr")
+hr_group.add_command(recruiter_applications.applications_cmd, "applications")
+hr_group.add_command(recruiter_resume.resume_cmd, "resume")
+hr_group.add_command(recruiter_chat.recruiter_chat_cmd, "chat")
+hr_group.add_command(recruiter_jobs.jobs_group, "jobs")
+hr_group.add_command(recruiter_candidates.candidates_cmd, "candidates")
+hr_group.add_command(recruiter_reply.reply_cmd, "reply")
+hr_group.add_command(recruiter_request_resume.request_resume_cmd, "request-resume")
