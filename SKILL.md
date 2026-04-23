@@ -1,6 +1,6 @@
 # boss-agent-cli
 
-> AI Agent 专用的 BOSS 直聘求职 CLI 工具 — 32 个命令覆盖搜索、筛选、打招呼、沟通、流水线、简历优化全流程。
+> AI Agent 专用的 BOSS 直聘双端 CLI 工具 — 33 个顶层命令 + 7 个招聘者子命令，覆盖职位搜索、福利筛选、沟通、流水线、招聘者工作流、MCP 工具与 AI 简历优化。
 
 ## Install
 
@@ -53,7 +53,23 @@ boss status    # 验证登录态
     → boss schema  (返回全部能力 JSON)
 ```
 
-## Commands (32)
+## Commands
+
+当前 `boss schema` 暴露：
+- **33 个顶层命令**
+- **`hr` 下 7 个一级招聘者子命令**
+
+### Recruiter Workflow
+
+| Command | Description |
+|---------|-------------|
+| `boss hr applications` | 查看候选人投递申请 |
+| `boss hr candidates <keyword>` | 搜索候选人 |
+| `boss hr chat` | 招聘者沟通列表 |
+| `boss hr resume` | 查看/请求候选人简历 |
+| `boss hr reply <friend_id> <message>` | 回复候选人消息 |
+| `boss hr request-resume <friend_id> --job-id <id>` | 请求候选人附件简历 |
+| `boss hr jobs list/online/offline` | 职位列表与上下线管理 |
 
 ### Discovery & Auth
 
@@ -137,7 +153,7 @@ boss status    # 验证登录态
 boss schema
 ```
 
-Returns a JSON envelope describing all 32 commands, parameters, 17 error codes, and output conventions.
+Returns a JSON envelope describing all 33 top-level commands, the `hr` recruiter command group, parameters, error codes, and output conventions.
 
 ### Step 2: Check auth, then act
 
@@ -148,6 +164,9 @@ boss detail <security_id> --job-id <id>            # View details (fast path)
 boss greet <security_id> <job_id>                  # Send greeting
 boss pipeline                                      # Track progress
 boss digest                                        # Daily summary
+boss hr applications                               # Recruiter inbox
+boss hr candidates "golang"                        # Search candidates
+boss hr reply <friend_id> "你好"                   # Recruiter reply
 ```
 
 ### Step 3: Parse output
