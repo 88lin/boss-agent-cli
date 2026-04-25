@@ -13,8 +13,8 @@
 uv tool install boss-agent-cli
 patchright install chromium
 
-# 2. 安装 MCP 依赖
-pip install mcp
+# 2. 安装 MCP 依赖并暴露 MCP 入口
+uv tool install "boss-agent-cli[mcp]"
 ```
 
 ## 配置 Claude Desktop
@@ -25,8 +25,8 @@ pip install mcp
 {
   "mcpServers": {
     "boss-agent-cli": {
-      "command": "python3",
-      "args": ["/path/to/boss-agent-cli/mcp-server/server.py"]
+      "command": "boss-mcp",
+      "args": []
     }
   }
 }
@@ -41,13 +41,15 @@ pip install mcp
 ```json
 {
   "boss-agent-cli": {
-    "command": "python3",
-    "args": ["/path/to/boss-agent-cli/mcp-server/server.py"]
+    "command": "boss-mcp",
+    "args": []
   }
 }
 ```
 
 ## 可用工具
+
+当前 MCP Server 暴露 **49 个工具**，覆盖求职者链路、AI 辅助能力，以及招聘者侧 `hr` 工作流。
 
 ### 认证与环境
 
@@ -102,6 +104,18 @@ pip install mcp
 |------|------|
 | `boss_me` | 用户信息（基本信息、简历、求职期望、投递记录） |
 
+### 招聘者工作流
+
+| 工具 | 说明 |
+|------|------|
+| `boss_hr_applications` | 查看候选人投递申请列表 |
+| `boss_hr_candidates` | 搜索候选人 |
+| `boss_hr_chat` | 招聘者沟通列表 |
+| `boss_hr_resume` | 查看候选人在线简历 |
+| `boss_hr_reply` | 回复候选人消息 |
+| `boss_hr_request_resume` | 请求候选人附件简历 |
+| `boss_hr_jobs` | 职位列表与上下线管理 |
+
 ## 使用示例
 
 配置完成后，在 Claude Desktop 中直接说：
@@ -117,8 +131,7 @@ Claude 会自动调用 `boss_search` 工具并展示结果。
 Claude Desktop / Cursor / Codex 等通过 stdin/stdout 直接对接。上述 `claude_desktop_config.json` 配置方式即为 stdio 模式。
 
 ```bash
-python3 mcp-server/server.py
-# 默认等价于：--transport stdio
+boss-mcp
 ```
 
 ### HTTP / SSE（规划中，见 [Issue #48](https://github.com/can4hou6joeng4/boss-agent-cli/issues/48)）
