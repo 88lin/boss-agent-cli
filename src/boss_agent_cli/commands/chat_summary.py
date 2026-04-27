@@ -3,7 +3,7 @@ import click
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.chat_summary import summarize_messages
 from boss_agent_cli.commands._platform import get_platform_instance
-from boss_agent_cli.display import handle_auth_errors, handle_error_output, handle_output, render_message_panel
+from boss_agent_cli.display import boss_command_for_ctx, handle_auth_errors, handle_error_output, handle_output, render_message_panel
 
 
 @click.command("chat-summary")
@@ -15,11 +15,12 @@ from boss_agent_cli.display import handle_auth_errors, handle_error_output, hand
 def chat_summary_cmd(ctx: click.Context, security_id: str, page: int, count: int) -> None:
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 
 	with get_platform_instance(ctx, auth) as platform:
 		friends_resp = platform.friend_list(page=1)
-		items = friends_resp.get("zpData", {}).get("result") or friends_resp.get("zpData", {}).get("friendList") or []
+		friends_data = platform.unwrap_data(friends_resp) or {}
+		items = friends_data.get("result") or friends_data.get("friendList") or []
 
 		gid = None
 		friend_name = "-"
@@ -39,7 +40,8 @@ def chat_summary_cmd(ctx: click.Context, security_id: str, page: int, count: int
 			return
 
 		resp = platform.chat_history(gid, security_id, page=page, count=count)
-		messages = resp.get("zpData", {}).get("messages") or resp.get("zpData", {}).get("historyMsgList") or []
+		msg_data = platform.unwrap_data(resp) or {}
+		messages = msg_data.get("messages") or msg_data.get("historyMsgList") or []
 		summary = summarize_messages(messages, friend_uid=gid)
 
 	handle_output(
@@ -51,5 +53,10 @@ def chat_summary_cmd(ctx: click.Context, security_id: str, page: int, count: int
 			**summary,
 		},
 		render=lambda d: render_message_panel(d, title="chat-summary"),
-		hints={"next_actions": ["boss chat", f"boss chatmsg {security_id}"]},
+		hints={
+			"next_actions": [
+				boss_command_for_ctx(ctx, "chat"),
+				boss_command_for_ctx(ctx, f"chatmsg {security_id}"),
+			]
+		},
 	)

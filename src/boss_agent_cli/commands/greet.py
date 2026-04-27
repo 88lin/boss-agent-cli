@@ -43,7 +43,7 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 			)
 			return
 
-		auth = AuthManager(data_dir, logger=logger)
+		auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 		with get_platform_instance(ctx, auth) as platform:
 			# greet_before hook — allows veto
 			hooks = ctx.obj.get("hooks")
@@ -62,7 +62,17 @@ def greet_cmd(ctx: click.Context, security_id: str, job_id: str, message: str) -
 					)
 					return
 
-			platform.greet(security_id, job_id, message)
+			resp = platform.greet(security_id, job_id, message)
+			if not platform.is_success(resp):
+				error_code, _ = platform.parse_error(resp)
+				handle_error_output(
+					ctx, "greet",
+					code=error_code if error_code != "UNKNOWN" else "NETWORK_ERROR",
+					message=resp.get("message") or "打招呼失败",
+					recoverable=True,
+					recovery_action="重试",
+				)
+				return
 
 			cache.record_greet(security_id, job_id)
 
@@ -115,15 +125,15 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 	count = min(count, 10)
 
 	with CacheStore(data_dir / "cache" / "boss_agent.db") as cache:
-		auth = AuthManager(data_dir, logger=logger)
+		auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 		with get_platform_instance(ctx, auth) as platform:
 			raw = platform.search_jobs(
 				query, city=city, salary=salary, experience=experience,
 				education=education, industry=industry, scale=scale,
 				stage=stage, job_type=job_type,
 			)
-			zp_data = raw.get("zpData", {})
-			job_list = zp_data.get("jobList", [])
+			platform_data = platform.unwrap_data(raw) or {}
+			job_list = platform_data.get("jobList", [])
 
 			candidates = []
 			for raw_item in job_list:
@@ -154,7 +164,10 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 
 				while retry_count <= 1:
 					try:
-						platform.greet(item.security_id, item.job_id)
+						resp = platform.greet(item.security_id, item.job_id)
+						if not platform.is_success(resp):
+							error_code, _ = platform.parse_error(resp)
+							raise RuntimeError(error_code if error_code != "UNKNOWN" else (resp.get("message") or "greet failed"))
 						cache.record_greet(item.security_id, item.job_id)
 						results.append({
 							"security_id": item.security_id,

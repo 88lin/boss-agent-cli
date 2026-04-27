@@ -2,7 +2,7 @@ import click
 
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.commands._platform import get_platform_instance
-from boss_agent_cli.display import handle_auth_errors, handle_error_output, handle_output, render_simple_list
+from boss_agent_cli.display import handle_auth_errors, handle_error_output, handle_output, login_action_for_ctx, render_simple_list
 from typing import Any
 
 
@@ -13,21 +13,23 @@ def interviews_cmd(ctx: click.Context) -> None:
 	"""查看面试邀请列表"""
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 
 	token = auth.check_status()
 	if token is None:
+		login_action = login_action_for_ctx(ctx)
 		handle_error_output(
 			ctx, "interviews",
 			code="AUTH_REQUIRED",
-			message="未登录，请先执行 boss login",
-			recoverable=True, recovery_action="boss login",
+			message=f"未登录，请先执行 {login_action}",
+			recoverable=True, recovery_action=login_action,
 		)
 		return
 
 	with get_platform_instance(ctx, auth) as platform:
 		raw = platform.interview_data()
-		interview_list = raw.get("zpData", {}).get("interviewList", [])
+		platform_data = platform.unwrap_data(raw) or {}
+		interview_list = platform_data.get("interviewList", [])
 
 	items = [
 		{

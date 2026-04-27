@@ -1,5 +1,6 @@
 """MCP Server for boss-agent-cli — 让 Claude Desktop / Cursor 直接调用 BOSS 直聘求职工具。"""
 
+import copy
 import json
 import subprocess
 from typing import Any
@@ -8,7 +9,59 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+from boss_agent_cli.commands.schema import SCHEMA_DATA, _availability_note, _inject_availability
+from boss_agent_cli.platforms import list_platforms, list_recruiter_platforms
+
 server = Server("boss-agent-cli")
+
+
+def _build_schema_with_availability() -> dict[str, Any]:
+	data = copy.deepcopy(SCHEMA_DATA)
+	data["supported_platforms"] = list_platforms()
+	data["supported_recruiter_platforms"] = list_recruiter_platforms()
+	return _inject_availability(data)
+
+
+_SCHEMA_WITH_AVAILABILITY = _build_schema_with_availability()
+
+
+def _tool_availability(tool_name: str) -> dict[str, Any] | None:
+	name = tool_name.removeprefix("boss_")
+	commands = _SCHEMA_WITH_AVAILABILITY["commands"]
+
+	direct_map = {
+		"chat_summary": "chat-summary",
+		"batch_greet": "batch-greet",
+		"follow_up": "follow-up",
+	}
+	if name in direct_map:
+		return commands[direct_map[name]].get("availability")
+	if name in commands:
+		return commands[name].get("availability")
+
+	if name.startswith("ai_"):
+		sub_name = name.removeprefix("ai_").replace("_", "-")
+		return commands["ai"].get("availability")
+	if name.startswith("resume_"):
+		return commands["resume"].get("availability")
+	if name.startswith("watch_"):
+		return commands["watch"].get("availability")
+	if name.startswith("preset_"):
+		return commands["preset"].get("availability")
+	if name.startswith("shortlist_"):
+		return commands["shortlist"].get("availability")
+	if name.startswith("hr_"):
+		sub_name = name.removeprefix("hr_").replace("_", "-")
+		hr_availability = commands["hr"].get("availability") or {}
+		return hr_availability.get("subcommands", {}).get(sub_name, hr_availability)
+	return None
+
+
+def _decorate_tool_descriptions() -> None:
+	for tool in TOOLS:
+		availability = _tool_availability(tool.name)
+		if availability:
+			tool.description = f"{tool.description} [可用性: {_availability_note(availability)}]"
 
 # ── Tool 定义 ──────────────────────────────────────────────────────
 
@@ -564,6 +617,8 @@ TOOLS = [
 		},
 	),
 ]
+
+_decorate_tool_descriptions()
 
 
 # ── Tool 调用逻辑 ──────────────────────────────────────────────────

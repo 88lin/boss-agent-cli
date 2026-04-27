@@ -21,6 +21,10 @@
 
 后两种格式可直接喂给对应 SDK 的 `tools=` 参数，无需手写转换。
 
+补充说明：
+- `native` schema 里每个命令都带有 `availability`，可用于在业务侧先做 `role/platform` 过滤
+- `openai-tools` / `anthropic-tools` 导出的 `description` 也会内嵌同一份可用性提示，方便模型直接感知边界
+
 ## 最小 OpenAI 示例
 
 `examples/openai_agent.py`：

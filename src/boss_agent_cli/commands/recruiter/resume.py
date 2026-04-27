@@ -22,7 +22,7 @@ def resume_cmd(ctx: click.Context, geek_id: str, job_id: str, security_id: str |
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	with get_recruiter_platform_instance(ctx, auth) as platform:
 		if exchange_contact:
 			if not uid or not gid or not job_id:
@@ -34,7 +34,7 @@ def resume_cmd(ctx: click.Context, geek_id: str, job_id: str, security_id: str |
 				)
 				return
 			result = platform.exchange_request(1, uid, int(job_id), gid)
-			data = result.get("zpData", {})
+			data = platform.unwrap_data(result) or {}
 			data["message"] = "联系方式交换请求已发送"
 		elif security_id and job_id:
 			result = platform.view_geek(geek_id, job_id, security_id=security_id)

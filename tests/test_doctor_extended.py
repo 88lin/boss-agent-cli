@@ -20,7 +20,7 @@ def _base_patches():
 	}
 
 
-def _invoke_doctor(tmp_path=None, **overrides):
+def _invoke_doctor(tmp_path=None, platform="zhipin", **overrides):
 	"""执行 doctor 命令并返回 (exit_code, parsed_json)。
 
 	overrides 可以覆盖 token / cdp_ws / cookie / http_status / http_exc。
@@ -50,6 +50,8 @@ def _invoke_doctor(tmp_path=None, **overrides):
 		cli_args = []
 		if tmp_path is not None:
 			cli_args.extend(["--data-dir", str(tmp_path)])
+		if platform != "zhipin":
+			cli_args.extend(["--platform", platform])
 		cli_args.append("doctor")
 		result = runner.invoke(cli, cli_args)
 	parsed = json.loads(result.output)
@@ -397,3 +399,23 @@ def test_cookie_completeness_both_missing(tmp_path):
 	assert completeness["status"] == "warn"
 	assert "wbg" in completeness["detail"]
 	assert "zp_at" in completeness["detail"]
+
+
+def test_zhilian_doctor_uses_platform_specific_auth_quality(tmp_path):
+	token = {"cookies": {"zp_token": "tok"}, "x_zp_client_id": "cid"}
+	code, parsed = _invoke_doctor(tmp_path, platform="zhilian", token=token, cookie={"cookies": {"zp_token": "tok"}})
+	quality = _find_check(parsed["data"]["checks"], "auth_token_quality")
+	assert quality is not None
+	assert quality["status"] == "ok"
+	assert "zp_token/x-zp-client-id" in quality["detail"]
+
+
+def test_zhilian_doctor_uses_platform_specific_cookie_and_network_messages(tmp_path):
+	code, parsed = _invoke_doctor(tmp_path, platform="zhilian", token=None, cookie=None, http_status=200)
+	ce = _find_check(parsed["data"]["checks"], "cookie_extract")
+	assert ce is not None
+	assert "zhaopin" in ce["detail"]
+	assert "boss --platform zhilian login" in ce["hint"]
+	network = _find_check(parsed["data"]["checks"], "network")
+	assert network is not None
+	assert "zhaopin.com" in network["detail"]

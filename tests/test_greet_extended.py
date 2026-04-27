@@ -15,6 +15,7 @@ def _ctx_mock(mock_cls):
 	instance = mock_cls.return_value
 	instance.__enter__ = lambda self: self
 	instance.__exit__ = lambda self, *a: None
+	instance.unwrap_data.side_effect = lambda response: response.get("zpData") if "zpData" in response else response.get("data")
 	return instance
 
 
@@ -50,7 +51,8 @@ def test_greet_success_renders_message_and_records_cache(mock_cache_cls, mock_au
 	mock_cache = _ctx_mock(mock_cache_cls)
 	mock_cache.is_greeted.return_value = False
 	mock_platform = _ctx_mock(mock_get_platform)
-	mock_platform.greet.return_value = None
+	mock_platform.greet.return_value = {"code": 0, "zpData": {}}
+	mock_platform.is_success.return_value = True
 
 	runner = CliRunner()
 	result = runner.invoke(cli, ["greet", "sec_001", "job_001"])
@@ -84,7 +86,8 @@ def test_batch_greet_success_all(mock_cache_cls, mock_auth_cls, mock_client_cls,
 	mock_client.search_jobs.return_value = {
 		"zpData": {"jobList": [_make_raw_job("Go 1", "sec_1"), _make_raw_job("Go 2", "sec_2")]}
 	}
-	mock_client.greet.return_value = None  # 成功
+	mock_client.greet.return_value = {"code": 0, "zpData": {}}
+	mock_client.is_success.return_value = True
 	mock_time.sleep = MagicMock()
 
 	runner = CliRunner()
@@ -119,10 +122,11 @@ def test_batch_greet_rate_limited_stops_remaining(mock_cache_cls, mock_auth_cls,
 
 	def greet_side_effect(sid, jid, msg=""):
 		if sid == "s1":
-			return None
+			return {"code": 0, "zpData": {}}
 		raise RuntimeError("RATE_LIMITED 请求频率过高")
 
 	mock_client.greet.side_effect = greet_side_effect
+	mock_client.is_success.return_value = True
 	mock_time.sleep = MagicMock()
 
 	runner = CliRunner()
@@ -146,6 +150,7 @@ def test_batch_greet_greet_limit_stops_remaining(mock_cache_cls, mock_auth_cls, 
 		"zpData": {"jobList": [_make_raw_job("A", "s1"), _make_raw_job("B", "s2")]}
 	}
 	mock_client.greet.side_effect = RuntimeError("GREET_LIMIT 今日上限已达")
+	mock_client.is_success.return_value = True
 	mock_time.sleep = MagicMock()
 
 	runner = CliRunner()
@@ -176,9 +181,10 @@ def test_batch_greet_network_error_retries_once_then_skips(mock_cache_cls, mock_
 		if sid == "s1":
 			call_counts["s1"] += 1
 			raise ConnectionError("network timeout")
-		return None
+		return {"code": 0, "zpData": {}}
 
 	mock_client.greet.side_effect = greet_side_effect
+	mock_client.is_success.return_value = True
 	mock_time.sleep = MagicMock()
 
 	runner = CliRunner()
@@ -212,9 +218,10 @@ def test_batch_greet_network_error_first_retry_succeeds(mock_cache_cls, mock_aut
 		call_count["n"] += 1
 		if call_count["n"] == 1:
 			raise ConnectionError("transient")
-		return None  # 第二次成功
+		return {"code": 0, "zpData": {}}  # 第二次成功
 
 	mock_client.greet.side_effect = greet_side_effect
+	mock_client.is_success.return_value = True
 	mock_time.sleep = MagicMock()
 
 	runner = CliRunner()

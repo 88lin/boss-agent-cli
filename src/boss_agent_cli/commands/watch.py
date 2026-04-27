@@ -147,7 +147,7 @@ def watch_run_cmd(ctx: click.Context, name: str) -> None:
 			stage=params.get("stage"),
 			job_type=params.get("job_type"),
 		)
-		auth = AuthManager(data_dir, logger=logger)
+		auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 		with get_platform_instance(ctx, auth) as platform:
 			pipeline_result = run_search_pipeline(
 				platform,

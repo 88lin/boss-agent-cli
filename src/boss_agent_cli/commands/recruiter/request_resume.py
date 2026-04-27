@@ -16,7 +16,7 @@ def request_resume_cmd(ctx: click.Context, friend_id: int, job_id: int) -> None:
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	with get_recruiter_platform_instance(ctx, auth) as platform:
 		# friend_id 就是 uid，gid 也设为 uid
 		result = platform.exchange_request(3, friend_id, job_id, friend_id)

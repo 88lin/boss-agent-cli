@@ -3,7 +3,7 @@ import click
 from boss_agent_cli.api.client import AuthError
 from boss_agent_cli.auth.manager import AuthManager, AuthRequired, TokenRefreshFailed
 from boss_agent_cli.commands._platform import get_platform_instance
-from boss_agent_cli.display import handle_error_output, handle_output, render_sectioned_record
+from boss_agent_cli.display import boss_command_for_ctx, handle_error_output, handle_output, login_action_for_ctx, render_sectioned_record
 
 
 @click.command("me")
@@ -17,7 +17,7 @@ def me_cmd(ctx: click.Context, section: str | None, deliver_page: int) -> None:
 	logger = ctx.obj.get("logger")
 
 	try:
-		auth = AuthManager(data_dir, logger=logger)
+		auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 		with get_platform_instance(ctx, auth) as platform:
 			result = {}
 
@@ -27,7 +27,7 @@ def me_cmd(ctx: click.Context, section: str | None, deliver_page: int) -> None:
 				if logger:
 					logger.info("获取用户基本信息...")
 				resp = platform.user_info()
-				zp_data = resp.get("zpData", {})
+				zp_data = platform.unwrap_data(resp) or {}
 				result["user"] = {
 					"name": zp_data.get("name", ""),
 					"email": zp_data.get("email", ""),
@@ -40,21 +40,21 @@ def me_cmd(ctx: click.Context, section: str | None, deliver_page: int) -> None:
 				if logger:
 					logger.info("获取简历基本信息...")
 				resp = platform.resume_baseinfo()
-				zp_data = resp.get("zpData", {})
+				zp_data = platform.unwrap_data(resp) or {}
 				result["resume"] = zp_data
 
 			if "expect" in sections:
 				if logger:
 					logger.info("获取求职期望...")
 				resp = platform.resume_expect()
-				zp_data = resp.get("zpData", {})
+				zp_data = platform.unwrap_data(resp) or {}
 				result["expect"] = zp_data
 
 			if "deliver" in sections:
 				if logger:
 					logger.info("获取投递记录...")
 				resp = platform.deliver_list(page=deliver_page)
-				zp_data = resp.get("zpData", {})
+				zp_data = platform.unwrap_data(resp) or {}
 				result["deliver"] = zp_data
 
 			handle_output(
@@ -62,15 +62,15 @@ def me_cmd(ctx: click.Context, section: str | None, deliver_page: int) -> None:
 				render=lambda d: render_sectioned_record(d, title="me"),
 				hints={
 					"next_actions": [
-						"boss search <关键词> --city <城市>",
-						"boss recommend",
+						boss_command_for_ctx(ctx, "search <关键词> --city <城市>"),
+						boss_command_for_ctx(ctx, "recommend"),
 					],
 				},
 			)
 
 	except (AuthRequired, TokenRefreshFailed):
-		handle_error_output(ctx, "me", code="AUTH_REQUIRED", message="未登录", recoverable=True, recovery_action="boss login")
+		handle_error_output(ctx, "me", code="AUTH_REQUIRED", message="未登录", recoverable=True, recovery_action=login_action_for_ctx(ctx))
 	except AuthError:
-		handle_error_output(ctx, "me", code="AUTH_EXPIRED", message="登录态过期", recoverable=True, recovery_action="boss login")
+		handle_error_output(ctx, "me", code="AUTH_EXPIRED", message="登录态过期", recoverable=True, recovery_action=login_action_for_ctx(ctx))
 	except Exception as e:
 		handle_error_output(ctx, "me", code="NETWORK_ERROR", message=str(e), recoverable=True, recovery_action="重试")

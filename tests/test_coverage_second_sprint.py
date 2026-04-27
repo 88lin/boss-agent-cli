@@ -12,6 +12,7 @@ def _ctx_mock(mock_cls):
 	instance = mock_cls.return_value
 	instance.__enter__ = lambda self: self
 	instance.__exit__ = lambda self, *a: None
+	instance.unwrap_data.side_effect = lambda response: response.get("zpData") if "zpData" in response else response.get("data")
 	return instance
 
 
@@ -73,6 +74,7 @@ def test_show_job_card_empty_returns_not_found(mock_get_job, mock_auth_cls, mock
 	mock_get_job.return_value = {"security_id": "sec1"}
 	client = _ctx_mock(mock_client_cls)
 	client.job_card.return_value = {"zpData": {"jobCard": {}}}  # 空 card
+	client.unwrap_data.return_value = client.job_card.return_value["zpData"]
 	runner = CliRunner()
 	result = runner.invoke(cli, ["--json", "show", "1"])
 	parsed = json.loads(result.output)

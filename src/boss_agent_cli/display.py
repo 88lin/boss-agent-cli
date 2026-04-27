@@ -18,6 +18,20 @@ from boss_agent_cli.output import emit_success
 console = Console(stderr=True)
 
 
+def boss_command_for_ctx(ctx: Any, command: str) -> str:
+	"""Return a platform-aware boss subcommand."""
+	platform_name = "zhipin"
+	if ctx and getattr(ctx, "obj", None):
+		platform_name = ctx.obj.get("platform") or "zhipin"
+	prefix = "boss --platform zhilian" if platform_name == "zhilian" else "boss"
+	return f"{prefix} {command}".strip()
+
+
+def login_action_for_ctx(ctx: Any) -> str:
+	"""Return the platform-aware login recovery command."""
+	return boss_command_for_ctx(ctx, "login")
+
+
 def is_json_mode(ctx) -> bool:
 	"""Check if --json flag is set or stdout is piped (non-TTY)."""
 	force_json = ctx.obj.get("json_output", False) if ctx and ctx.obj else False
@@ -110,7 +124,7 @@ def render_job_table(
 		console.print(f"  [dim]{hint_next}[/dim]")
 
 
-def render_job_detail(data: dict) -> None:
+def render_job_detail(data: dict, *, greet_command: str | None = None) -> None:
 	"""Render job detail as a rich panel."""
 	title = data.get("title", "-")
 	salary = data.get("salary", "-")
@@ -146,16 +160,17 @@ def render_job_detail(data: dict) -> None:
 	sid = data.get("security_id", "")
 	jid = data.get("job_id", "")
 	if sid and jid:
-		console.print(f"  [dim]greet: boss greet {sid} {jid}[/dim]")
+		greet_command = greet_command or f"boss greet {sid} {jid}"
+		console.print(f"  [dim]greet: {greet_command}[/dim]")
 
 
-def render_status(data: dict) -> None:
+def render_status(data: dict, *, login_action: str = "boss login") -> None:
 	"""Render login status."""
 	if data.get("logged_in"):
 		name = data.get("user_name", "unknown")
 		console.print(f"[green]logged in[/green] as [bold]{name}[/bold]")
 	else:
-		console.print("[yellow]not logged in[/yellow] - run: boss login")
+		console.print(f"[yellow]not logged in[/yellow] - run: {login_action}")
 
 
 def render_simple_list(
@@ -288,16 +303,18 @@ def handle_auth_errors(command_name: str) -> Callable[[Callable[..., Any]], Call
 			try:
 				return func(ctx, *args, **kwargs)
 			except AuthRequired:
+				login_action = login_action_for_ctx(ctx)
 				handle_error_output(
 					ctx, command_name, code="AUTH_REQUIRED",
-					message="未登录，请先执行 boss login",
-					recoverable=True, recovery_action="boss login",
+					message=f"未登录，请先执行 {login_action}",
+					recoverable=True, recovery_action=login_action,
 				)
 			except TokenRefreshFailed:
+				login_action = login_action_for_ctx(ctx)
 				handle_error_output(
 					ctx, command_name, code="TOKEN_REFRESH_FAILED",
 					message="Token 刷新失败，请重新登录",
-					recoverable=True, recovery_action="boss login",
+					recoverable=True, recovery_action=login_action,
 				)
 			except AccountRiskError as e:
 				recovery = (

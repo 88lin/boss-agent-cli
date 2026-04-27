@@ -27,7 +27,27 @@ class TestPlatformGlobalOption:
 		meta = payload["data"]
 		assert "supported_platforms" in meta
 		assert "zhipin" in meta["supported_platforms"]
+		assert "supported_recruiter_platforms" in meta
+		assert "zhipin-recruiter" in meta["supported_recruiter_platforms"]
 		assert meta.get("current_platform") == "zhipin"
+
+	def test_schema_exposes_command_availability(self, runner: CliRunner) -> None:
+		from boss_agent_cli.main import cli
+
+		result = runner.invoke(cli, ["schema"])
+		assert result.exit_code == 0
+		payload = json.loads(result.output)
+		commands = payload["data"]["commands"]
+		search_availability = commands["search"]["availability"]
+		assert search_availability["roles"] == ["candidate"]
+		assert "zhipin" in search_availability["candidate_platforms"]
+		assert "zhilian" in search_availability["candidate_platforms"]
+		assert search_availability["recruiter_platforms"] == []
+
+		hr_availability = commands["hr"]["availability"]
+		assert hr_availability["roles"] == ["recruiter"]
+		assert "zhipin-recruiter" in hr_availability["recruiter_platforms"]
+		assert "applications" in hr_availability["subcommands"]
 
 	def test_schema_current_platform_reflects_option(self, runner: CliRunner) -> None:
 		from boss_agent_cli.main import cli
@@ -51,6 +71,27 @@ class TestPlatformGlobalOption:
 		payload = json.loads(result.output)
 		global_opts = payload["data"]["global_options"]
 		assert "--platform" in global_opts
+
+	def test_openai_tools_description_includes_availability(self, runner: CliRunner) -> None:
+		from boss_agent_cli.main import cli
+
+		result = runner.invoke(cli, ["schema", "--format", "openai-tools"])
+		assert result.exit_code == 0
+		payload = json.loads(result.output)
+		tool = next(t for t in payload["data"]["tools"] if t["function"]["name"] == "boss_search")
+		assert "candidate_platforms=" in tool["function"]["description"]
+		assert "zhilian" in tool["function"]["description"]
+		assert "zhipin" in tool["function"]["description"]
+
+	def test_schema_login_description_mentions_platform_aware_flow(self, runner: CliRunner) -> None:
+		from boss_agent_cli.main import cli
+
+		result = runner.invoke(cli, ["schema"])
+		assert result.exit_code == 0
+		payload = json.loads(result.output)
+		login_desc = payload["data"]["commands"]["login"]["description"]
+		assert "zhipin" in login_desc
+		assert "zhilian" in login_desc
 
 
 class TestGetPlatformInstanceHelper:

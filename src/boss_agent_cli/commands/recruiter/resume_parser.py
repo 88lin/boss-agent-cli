@@ -93,7 +93,8 @@ def parse_resume(raw: dict[str, Any]) -> dict[str, Any]:
 	Parameters
 	----------
 	raw : dict
-		view_geek 返回的完整响应（含 code/zpData）。
+		view_geek 返回的完整响应（含 code/zpData 或 code/data），
+		也可直接传入已解包的数据体。
 
 	Returns
 	-------
@@ -101,8 +102,10 @@ def parse_resume(raw: dict[str, Any]) -> dict[str, Any]:
 		结构化简历：basic / expectation / work_experience /
 		project_experience / education / competitive_analysis / certifications
 	"""
-	zp = raw.get("zpData", {})
-	info = zp.get("geekDetailInfo", {})
+	payload = raw.get("zpData") if "zpData" in raw else raw.get("data", raw)
+	if not isinstance(payload, dict):
+		payload = {}
+	info = payload.get("geekDetailInfo", {})
 
 	certs = [_safe_str(c.get("certName")) for c in info.get("geekCertificationList", []) if c.get("certName")]
 

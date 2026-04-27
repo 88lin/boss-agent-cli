@@ -6,7 +6,7 @@ import click
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.cache.store import CacheStore
 from boss_agent_cli.commands._platform import get_platform_instance
-from boss_agent_cli.display import handle_auth_errors, handle_error_output, handle_output, render_job_detail
+from boss_agent_cli.display import boss_command_for_ctx, handle_auth_errors, handle_error_output, handle_output, render_job_detail
 from boss_agent_cli.platforms import Platform
 
 
@@ -21,7 +21,7 @@ def detail_cmd(ctx: click.Context, security_id: str, lid: str, job_id: str) -> N
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	with get_platform_instance(ctx, auth) as platform:
 		# 优先走 httpx 快速通道：显式传入 > 缓存查找 > 降级浏览器通道
 		if not job_id:
@@ -48,18 +48,25 @@ def detail_cmd(ctx: click.Context, security_id: str, lid: str, job_id: str) -> N
 		)
 		return
 
-	greet_target = f"boss greet {security_id} {result['job_id']}"
-	hints = {"next_actions": [greet_target, "boss search <query>"]}
-	handle_output(ctx, "detail", result, render=render_job_detail, hints=hints)
+	greet_target = boss_command_for_ctx(ctx, f"greet {security_id} {result['job_id']}")
+	search_target = boss_command_for_ctx(ctx, "search <query>")
+	hints = {"next_actions": [greet_target, search_target]}
+	handle_output(
+		ctx,
+		"detail",
+		result,
+		render=lambda data: render_job_detail(data, greet_command=greet_target),
+		hints=hints,
+	)
 
 
 def _detail_via_httpx(platform: Platform, security_id: str, job_id: str, data_dir: Path) -> dict[str, Any] | None:
 	"""快速通道：通过 httpx 获取职位详情（不需要浏览器）"""
 	raw = platform.job_detail(job_id)
-	zp = raw.get("zpData", {})
-	job_info = zp.get("jobInfo", {})
-	boss_info = zp.get("bossInfo", {})
-	brand_info = zp.get("brandComInfo", {})
+	platform_data = platform.unwrap_data(raw) or {}
+	job_info = platform_data.get("jobInfo", {})
+	boss_info = platform_data.get("bossInfo", {})
+	brand_info = platform_data.get("brandComInfo", {})
 
 	if not job_info:
 		return None
@@ -75,7 +82,7 @@ def _detail_via_httpx(platform: Platform, security_id: str, job_id: str, data_di
 		"city": job_info.get("cityName", ""),
 		"experience": job_info.get("experienceName", ""),
 		"education": job_info.get("degreeName", ""),
-		"description": zp.get("jobDetail", "") or job_info.get("postDescription", ""),
+		"description": platform_data.get("jobDetail", "") or job_info.get("postDescription", ""),
 		"address": job_info.get("address", ""),
 		"skills": job_info.get("jobLabels", []) or job_info.get("skills", []),
 		"boss_name": boss_info.get("name", ""),
@@ -89,7 +96,8 @@ def _detail_via_httpx(platform: Platform, security_id: str, job_id: str, data_di
 def _detail_via_browser(platform: Platform, security_id: str, lid: str, data_dir: Path) -> dict[str, Any] | None:
 	"""兜底通道：通过浏览器 job_card 获取职位详情"""
 	raw = platform.job_card(security_id, lid)
-	card = raw.get("zpData", {}).get("jobCard", {})
+	platform_data = platform.unwrap_data(raw) or {}
+	card = platform_data.get("jobCard", {})
 	if not card:
 		return None
 

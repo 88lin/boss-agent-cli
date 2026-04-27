@@ -21,10 +21,10 @@ def jobs_list_cmd(ctx: click.Context) -> None:
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	with get_recruiter_platform_instance(ctx, auth) as platform:
 		result = platform.list_jobs()
-		data = result.get("zpData", {})
+		data = platform.unwrap_data(result) or {}
 		handle_output(ctx, "recruiter-jobs-list", data)
 
 
@@ -37,7 +37,7 @@ def jobs_offline_cmd(ctx: click.Context, job_id: str) -> None:
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	with get_recruiter_platform_instance(ctx, auth) as platform:
 		platform.job_offline(job_id)
 		data = {"job_id": job_id, "message": "职位已下线"}
@@ -53,7 +53,7 @@ def jobs_online_cmd(ctx: click.Context, job_id: str) -> None:
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	with get_recruiter_platform_instance(ctx, auth) as platform:
 		platform.job_online(job_id)
 		data = {"job_id": job_id, "message": "职位已上线"}

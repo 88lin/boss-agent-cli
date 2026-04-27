@@ -1,18 +1,9 @@
-"""ZhilianPlatform stub 契约测试。
-
-Zhilian 在 Week 1d 以 stub 形态接入 Platform 注册表，P0/P1/P2 方法暂抛 NotImplementedError，
-但 is_success / unwrap_data / parse_error 按智联真实协议返回正确值，
-验证 Platform 抽象设计对第二平台也自洽（Issue #129 Week 1d 自证）。
-
-Week 2 会把 stub 替换为真实实现。
-"""
+"""ZhilianPlatform 契约测试。"""
 
 from __future__ import annotations
 
 import json
 from unittest.mock import MagicMock
-
-import pytest
 from click.testing import CliRunner
 
 from boss_agent_cli.platforms import BossPlatform, Platform, get_platform, list_platforms
@@ -98,39 +89,45 @@ class TestZhilianEnvelopeAdapter:
 		assert code == "UNKNOWN"
 
 
-class TestZhilianStubBehavior:
-	"""Stub 方法在 Week 2 之前应抛 NotImplementedError 附友好提示。"""
+class TestZhilianDelegation:
+	"""ZhilianPlatform 只读方法委托给底层 ZhilianClient。"""
 
 	def setup_method(self) -> None:
-		self.plat = ZhilianPlatform(MagicMock())
+		self.mock_client = MagicMock()
+		self.plat = ZhilianPlatform(self.mock_client)
 
-	def test_search_jobs_not_implemented(self) -> None:
-		with pytest.raises(NotImplementedError, match="Week 2"):
-			self.plat.search_jobs("Python")
+	def test_search_jobs_delegates(self) -> None:
+		self.mock_client.search_jobs.return_value = {"code": 200, "data": {}}
+		result = self.plat.search_jobs("Python", city="530")
+		self.mock_client.search_jobs.assert_called_once_with("Python", city="530")
+		assert result == {"code": 200, "data": {}}
 
-	def test_job_detail_not_implemented(self) -> None:
-		with pytest.raises(NotImplementedError, match="Week 2"):
-			self.plat.job_detail("abc")
+	def test_job_detail_delegates(self) -> None:
+		self.mock_client.job_detail.return_value = {"code": 200, "data": {}}
+		self.plat.job_detail("job-1")
+		self.mock_client.job_detail.assert_called_once_with("job-1")
 
-	def test_recommend_jobs_not_implemented(self) -> None:
-		with pytest.raises(NotImplementedError, match="Week 2"):
-			self.plat.recommend_jobs()
+	def test_recommend_jobs_delegates(self) -> None:
+		self.mock_client.recommend_jobs.return_value = {"code": 200, "data": {}}
+		self.plat.recommend_jobs(page=2)
+		self.mock_client.recommend_jobs.assert_called_once_with(2)
 
-	def test_user_info_not_implemented(self) -> None:
-		with pytest.raises(NotImplementedError, match="Week 2"):
-			self.plat.user_info()
+	def test_user_info_delegates(self) -> None:
+		self.mock_client.user_info.return_value = {"code": 200, "data": {}}
+		self.plat.user_info()
+		self.mock_client.user_info.assert_called_once_with()
 
-	def test_greet_not_implemented_defaults_from_base(self) -> None:
-		"""Platform 基类 greet 抛 NotImplementedError，Zhilian stub 沿用。"""
-		with pytest.raises(NotImplementedError):
-			self.plat.greet("sid", "jid")
+	def test_greet_delegates(self) -> None:
+		self.mock_client.greet.return_value = {"code": 200, "data": {}}
+		self.plat.greet("sid", "jid", "hi")
+		self.mock_client.greet.assert_called_once_with("sid", "jid", "hi")
 
-	def test_apply_not_implemented_defaults_from_base(self) -> None:
-		with pytest.raises(NotImplementedError):
-			self.plat.apply("sid", "jid")
+	def test_apply_delegates(self) -> None:
+		self.mock_client.apply.return_value = {"code": 200, "data": {}}
+		self.plat.apply("sid", "jid", "lid-1")
+		self.mock_client.apply.assert_called_once_with("sid", "jid", "lid-1")
 
-	def test_stub_can_enter_with_context(self) -> None:
-		"""with 上下文即使 P0 方法抛错也能正常关闭（客户端是 MagicMock）。"""
+	def test_platform_can_enter_with_context(self) -> None:
 		mock_client = MagicMock()
 		plat = ZhilianPlatform(mock_client)
 		with plat:
@@ -158,6 +155,7 @@ class TestZhilianCliIntegration:
 		assert result.exit_code == 0
 		payload = json.loads(result.output)
 		assert "zhilian" in payload["data"]["supported_platforms"]
+		assert "zhipin-recruiter" in payload["data"]["supported_recruiter_platforms"]
 
 	def test_schema_platform_choice_updated(self) -> None:
 		"""schema 的 --platform 选项 choices 应包含 zhilian。"""
@@ -169,3 +167,14 @@ class TestZhilianCliIntegration:
 		payload = json.loads(result.output)
 		platform_opt = payload["data"]["global_options"]["--platform"]
 		assert "zhilian" in platform_opt.get("choices", [])
+
+	def test_schema_marks_hr_as_recruiter_only(self) -> None:
+		from boss_agent_cli.main import cli
+
+		runner = CliRunner()
+		result = runner.invoke(cli, ["schema"])
+		assert result.exit_code == 0
+		payload = json.loads(result.output)
+		availability = payload["data"]["commands"]["hr"]["availability"]
+		assert availability["roles"] == ["recruiter"]
+		assert availability["candidate_platforms"] == []

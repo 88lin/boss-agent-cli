@@ -104,12 +104,10 @@ def test_ai_service_error_is_exception():
 
 
 def test_platform_is_abstract():
-	import abc
 	assert inspect_abstract(boss_agent_cli.Platform)
 
 
 def inspect_abstract(cls: type) -> bool:
-	import abc
 	return bool(getattr(cls, "__abstractmethods__", set()))
 
 

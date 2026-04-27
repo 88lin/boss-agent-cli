@@ -12,6 +12,7 @@ def _ctx_mock(mock_cls):
 	instance = mock_cls.return_value
 	instance.__enter__ = lambda self: self
 	instance.__exit__ = lambda self, *a: None
+	instance.unwrap_data.side_effect = lambda response: response.get("zpData") if "zpData" in response else response.get("data")
 	return instance
 
 
@@ -398,6 +399,7 @@ def test_chatmsg_uses_client_context_manager(mock_auth_cls, mock_client_cls):
 	instance = mock_client_cls.return_value
 	instance.__enter__ = MagicMock(return_value=instance)
 	instance.__exit__ = MagicMock(return_value=None)
+	instance.unwrap_data.side_effect = lambda response: response.get("zpData") if "zpData" in response else response.get("data")
 	instance.friend_list.return_value = _friend_list_response([_make_friend()])
 	instance.chat_history.return_value = {"zpData": {"messages": []}}
 	runner = CliRunner()

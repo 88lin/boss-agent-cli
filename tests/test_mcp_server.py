@@ -42,6 +42,21 @@ def test_all_tools_have_name_and_description():
 		assert tool.description, f"{tool.name} 缺少描述"
 
 
+def test_candidate_tool_description_includes_availability():
+	search = next(t for t in TOOLS if t.name == "boss_search")
+	assert "可用性:" in search.description
+	assert "roles=candidate" in search.description
+	assert "zhilian" in search.description
+	assert "zhipin" in search.description
+
+
+def test_recruiter_tool_description_includes_availability():
+	tool = next(t for t in TOOLS if t.name == "boss_hr_candidates")
+	assert "可用性:" in tool.description
+	assert "roles=recruiter" in tool.description
+	assert "zhipin-recruiter" in tool.description
+
+
 def test_all_tools_have_input_schema():
 	"""每个工具都应有输入模式定义。"""
 	for tool in TOOLS:

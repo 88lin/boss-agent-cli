@@ -1,77 +1,84 @@
-"""智联招聘内部 HTTP 客户端骨架（Week 2 实施前占位）。
+"""智联招聘内部 HTTP 客户端。
 
-**当前状态**：类结构 + __init__/close 签名对齐 BossClient，所有 P0/P1/P2 方法抛
-``NotImplementedError("Zhilian client Week 2 待实现，详见 Issue #140")``。
+Week 2 P0 先落地只读链路：基础 httpx client + 4 个读接口，
+保持 ``BossClient`` 风格的资源生命周期和重试语义。
 
-**Week 2 TODO**（Issue #140）：
-- 基于 httpx 实现真实 HTTP 调用
-- 基于 BrowserSession / Bridge 获取 CSRF token
-- 实现 search_jobs / job_detail / recommend_jobs / user_info 四个 P0 只读方法
-- 认证链路（Cookie + X-Lagou-Token 或智联对应 token）
+**当前范围**：
+- ``search_jobs`` / ``job_detail`` / ``recommend_jobs`` / ``user_info``
+- Cookie + User-Agent + ``x-zp-client-id`` 透传
+- 401/403 刷新、429 退避
 
-**P0-1 已实施**（本文件 `_get_httpx_client`）：
-- httpx.Client lazy 初始化 + 资源生命周期闭环
-- 注入 Cookie / User-Agent / sec-ch-ua-platform / x-zp-client-id / Referer / Origin
-- 多域名（fe-api / i / www zhaopin.com）不绑死 base_url，调用时传完整 URL
-
-**设计依据**：
-- [docs/research/platforms/zhaopin.md](../../docs/research/platforms/zhaopin.md) §2 端点清单
-- [src/boss_agent_cli/platforms/zhilian.py](../platforms/zhilian.py) Platform 适配层
+**暂不包含**：
+- CSRF token 获取
+- greet / apply 写操作
+- BrowserSession / Bridge 写通道
 """
 
 from __future__ import annotations
 
 import atexit
+from html.parser import HTMLParser
+import random
 import sys
+import time
 import weakref
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from boss_agent_cli.api.throttle import RequestThrottle
+
 if TYPE_CHECKING:
 	from boss_agent_cli.auth.manager import AuthManager
 
 
-_NOT_YET_MSG = (
-	"Zhilian client Week 2 待实现，当前为 stub 占位，"
-	"追踪进度见 Issue #140（https://github.com/can4hou6joeng4/boss-agent-cli/issues/140）"
-)
+_MAX_RETRIES = 3
 
-# 智联站点常量 — 多域名不绑死 base_url，只用于 Referer / Origin
-ZHAOPIN_HOME = "https://www.zhaopin.com"
-ZHAOPIN_DOMAIN = "https://www.zhaopin.com/"
+SEARCH_URL = "https://fe-api.zhaopin.com/api/c/salesman-search/v2"
+DETAIL_URL_TEMPLATE = "https://fe-api.zhaopin.com/api/c/jobs/{job_id}/info"
+RECOMMEND_URL = "https://fe-api.zhaopin.com/api/c/recom-position"
+USER_INFO_URL = "https://i.zhaopin.com/api/c/account/profile"
+CSRF_BOOTSTRAP_URL = "https://www.zhaopin.com/"
+GREET_URL = "https://fe-api.zhaopin.com/c/i/liaoliao/startConversation"
+APPLY_URL = "https://fe-api.zhaopin.com/c/i/sou/deliverPosition"
 
-# 兜底 UA（真实浏览器指纹，token 未提供时用）
-_DEFAULT_USER_AGENT = (
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-	"AppleWebKit/537.36 (KHTML, like Gecko) "
-	"Chrome/123.0.0.0 Safari/537.36"
-)
-
-# sec-ch-ua-platform 按运行平台动态映射
-_SEC_CH_UA_PLATFORM_MAP: dict[str, str] = {
-	"win32": '"Windows"',
-	"linux": '"Linux"',
-	"darwin": '"macOS"',
-}
-
-# 默认 header 模板（不含 token / 平台动态字段）
 _DEFAULT_HEADERS: dict[str, str] = {
 	"Accept": "application/json, text/plain, */*",
-	"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-	"sec-ch-ua": '"Chromium";v="123", "Not:A-Brand";v="8", "Google Chrome";v="123"',
-	"sec-ch-ua-mobile": "?0",
-	"Sec-Fetch-Site": "same-site",
-	"Sec-Fetch-Mode": "cors",
-	"Sec-Fetch-Dest": "empty",
-	"Referer": ZHAOPIN_DOMAIN,
-	"Origin": ZHAOPIN_HOME,
+	"X-Requested-With": "XMLHttpRequest",
+	"Referer": "https://www.zhaopin.com/",
+}
+
+_REFERER_MAP: dict[str, str] = {
+	SEARCH_URL: "https://sou.zhaopin.com/",
+	RECOMMEND_URL: "https://www.zhaopin.com/",
+	USER_INFO_URL: "https://i.zhaopin.com/",
 }
 
 
 # atexit safeguard：类比 BossClient 的管理方式
 _OPEN_CLIENTS: weakref.WeakSet["ZhilianClient"] = weakref.WeakSet()
+
+
+class _CsrfMetaParser(HTMLParser):
+	"""从 HTML meta 标签中提取 csrf-token。"""
+
+	def __init__(self) -> None:
+		super().__init__()
+		self.csrf_token: str | None = None
+
+	def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+		if tag.lower() != "meta" or self.csrf_token:
+			return
+		attr_map = {key.lower(): value for key, value in attrs}
+		if attr_map.get("name") == "csrf-token" and attr_map.get("content"):
+			self.csrf_token = attr_map["content"]
+
+
+def _extract_csrf_token(html: str) -> str | None:
+	parser = _CsrfMetaParser()
+	parser.feed(html)
+	return parser.csrf_token
 
 
 def _close_open_clients() -> None:
@@ -101,51 +108,119 @@ class ZhilianClient:
 		self._auth = auth_manager
 		self._delay = delay
 		self._cdp_url = cdp_url
-		self._httpx_client: httpx.Client | None = None
+		self._client: httpx.Client | None = None
+		self._csrf_token: str | None = None
+		self._throttle = RequestThrottle(delay)
 		self._closed = False
 		_OPEN_CLIENTS.add(self)
 
-	# ── 资源生命周期 ───────────────────────────────
-
-	def _get_httpx_client(self) -> httpx.Client:
-		"""惰性初始化 httpx.Client，注入认证 Cookie 与浏览器指纹头。
-
-		设计要点：
-		- 不绑 ``base_url``：智联多域名（fe-api / i / www zhaopin.com），
-		  调用方传完整 URL 即可。
-		- token 字段优先：``user_agent`` / ``x_zp_client_id`` 由
-		  ``auth_manager.get_token()`` 提供，缺失则用兜底 UA 与跳过 client_id。
-		- ``sec-ch-ua-platform`` 按 ``sys.platform`` 动态映射，避免 headless 检测。
-		"""
-		if self._httpx_client is None:
+	def _get_client(self) -> httpx.Client:
+		if self._client is None:
 			token = self._auth.get_token()
 			headers = dict(_DEFAULT_HEADERS)
-
-			ua = token.get("user_agent")
-			headers["User-Agent"] = ua if ua else _DEFAULT_USER_AGENT
-
-			headers["sec-ch-ua-platform"] = _SEC_CH_UA_PLATFORM_MAP.get(sys.platform, '"macOS"')
-
-			client_id = token.get("x_zp_client_id")
-			if client_id:
-				headers["x-zp-client-id"] = client_id
-
-			self._httpx_client = httpx.Client(
+			if ua := token.get("user_agent"):
+				headers["User-Agent"] = str(ua)
+			if client_id := token.get("x_zp_client_id") or token.get("client_id"):
+				headers["x-zp-client-id"] = str(client_id)
+			if sys.platform == "win32":
+				headers["sec-ch-ua-platform"] = '"Windows"'
+			elif sys.platform == "linux":
+				headers["sec-ch-ua-platform"] = '"Linux"'
+			else:
+				headers["sec-ch-ua-platform"] = '"macOS"'
+			self._client = httpx.Client(
 				cookies=token.get("cookies", {}),
 				headers=headers,
 				follow_redirects=True,
 				timeout=30,
 			)
-		return self._httpx_client
+		return self._client
+
+	def _headers_for(self, url: str) -> dict[str, str]:
+		return {"Referer": _REFERER_MAP.get(url, "https://www.zhaopin.com/")}
+
+	def _fetch_csrf_token(self) -> str:
+		for attempt in range(_MAX_RETRIES + 1):
+			client = self._get_client()
+			self._throttle.wait()
+			resp = client.get(
+				CSRF_BOOTSTRAP_URL,
+				headers={"Referer": CSRF_BOOTSTRAP_URL, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"},
+			)
+			self._throttle.mark()
+			self._merge_cookies(resp)
+
+			if resp.status_code in (401, 403) and attempt < _MAX_RETRIES:
+				backoff = (2 ** attempt) + random.uniform(0.3, 0.9)
+				time.sleep(backoff)
+				self._auth.force_refresh(cdp_url=self._cdp_url)
+				self._client = None
+				self._csrf_token = None
+				continue
+
+			resp.raise_for_status()
+			token = _extract_csrf_token(resp.text)
+			if token:
+				return token
+			raise RuntimeError("智联页面未找到 csrf-token")
+
+		raise RuntimeError("智联 csrf-token 获取失败，已达最大重试次数")
+
+	def _merge_cookies(self, resp: httpx.Response) -> None:
+		for name, value in resp.cookies.items():
+			if value:
+				self._get_client().cookies.set(name, value)
+
+	def _request(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+		for attempt in range(_MAX_RETRIES + 1):
+			client = self._get_client()
+			self._throttle.wait()
+			extra_headers = kwargs.pop("headers", {})
+			headers = {**self._headers_for(url), **extra_headers}
+			resp = client.request(method, url, headers=headers, **kwargs)
+			self._throttle.mark()
+			self._merge_cookies(resp)
+
+			status_code = resp.status_code
+			if status_code in (401, 403) and attempt < _MAX_RETRIES:
+				backoff = (2 ** attempt) + random.uniform(0.3, 0.9)
+				time.sleep(backoff)
+				self._auth.force_refresh(cdp_url=self._cdp_url)
+				self._client = None
+				continue
+			if status_code == 429 and attempt < _MAX_RETRIES:
+				time.sleep(min(30, 5 * (2 ** attempt)))
+				continue
+
+			resp.raise_for_status()
+			data = resp.json()
+			if not isinstance(data, dict):
+				raise RuntimeError("智联响应格式异常：期望 JSON object")
+			code = data.get("code")
+			if code in (401, 403) and attempt < _MAX_RETRIES:
+				backoff = (2 ** attempt) + random.uniform(0.3, 0.9)
+				time.sleep(backoff)
+				self._auth.force_refresh(cdp_url=self._cdp_url)
+				self._client = None
+				continue
+			if code == 429 and attempt < _MAX_RETRIES:
+				time.sleep(min(30, 5 * (2 ** attempt)))
+				continue
+			return data
+
+		raise RuntimeError("智联请求失败，已达最大重试次数")
+
+	# ── 资源生命周期 ───────────────────────────────
 
 	def close(self) -> None:
-		"""释放底层资源。Week 2 真实现后会关闭 httpx client 和 browser session。"""
-		if self._httpx_client is not None:
-			try:
-				self._httpx_client.close()
-			except Exception:
-				pass
+		"""释放底层资源。"""
+		if self._closed:
+			return
 		self._closed = True
+		if self._client is not None:
+			self._client.close()
+			self._client = None
+		_OPEN_CLIENTS.discard(self)
 
 	def __enter__(self) -> "ZhilianClient":
 		return self
@@ -158,16 +233,69 @@ class ZhilianClient:
 	) -> None:
 		self.close()
 
-	# ── P0 只读（Week 2 待实现）─────────────────────
+	# ── P0 只读 ────────────────────────────────────
+
+	def get_csrf_token(self, *, force_refresh: bool = False) -> str:
+		"""获取并缓存智联写操作所需的 csrf-token。"""
+		if force_refresh or not self._csrf_token:
+			self._csrf_token = self._fetch_csrf_token()
+		return self._csrf_token
+
+	def greet(self, security_id: str, job_id: str, message: str = "") -> dict[str, Any]:
+		payload: dict[str, Any] = {
+			"securityId": security_id,
+			"jobId": job_id,
+		}
+		if message:
+			payload["message"] = message
+		return self._request(
+			"POST",
+			GREET_URL,
+			data=payload,
+			headers={"csrf-token": self.get_csrf_token()},
+		)
+
+	def apply(self, security_id: str, job_id: str, lid: str = "") -> dict[str, Any]:
+		payload: dict[str, Any] = {
+			"securityId": security_id,
+			"jobId": job_id,
+		}
+		if lid:
+			payload["lid"] = lid
+		return self._request(
+			"POST",
+			APPLY_URL,
+			data=payload,
+			headers={"csrf-token": self.get_csrf_token()},
+		)
 
 	def search_jobs(self, query: str, **filters: Any) -> dict[str, Any]:
-		raise NotImplementedError(f"{_NOT_YET_MSG}: search_jobs(query={query!r}, filters={filters!r})")
+		params: dict[str, Any] = {
+			"keyword": query,
+			"pageNum": filters.get("page", 1),
+		}
+		if page_size := filters.get("page_size"):
+			params["pageSize"] = page_size
+		filter_map = {
+			"city": "cityId",
+			"salary": "salary",
+			"experience": "workExp",
+			"education": "education",
+			"scale": "companySize",
+			"industry": "industry",
+			"stage": "financingStage",
+			"job_type": "jobType",
+		}
+		for source_key, target_key in filter_map.items():
+			if value := filters.get(source_key):
+				params[target_key] = value
+		return self._request("GET", SEARCH_URL, params=params)
 
 	def job_detail(self, job_id: str) -> dict[str, Any]:
-		raise NotImplementedError(f"{_NOT_YET_MSG}: job_detail(job_id={job_id!r})")
+		return self._request("GET", DETAIL_URL_TEMPLATE.format(job_id=job_id))
 
 	def recommend_jobs(self, page: int = 1) -> dict[str, Any]:
-		raise NotImplementedError(f"{_NOT_YET_MSG}: recommend_jobs(page={page})")
+		return self._request("GET", RECOMMEND_URL, params={"pageNum": page})
 
 	def user_info(self) -> dict[str, Any]:
-		raise NotImplementedError(f"{_NOT_YET_MSG}: user_info()")
+		return self._request("GET", USER_INFO_URL)

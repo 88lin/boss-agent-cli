@@ -14,6 +14,44 @@ _NAV_TIMEOUT_MS = 15000          # 页面导航超时（毫秒）
 _POST_LOGIN_WAIT = 3             # 登录成功后等待 cookie 传播（秒）
 _STOKEN_GENERATION_WAIT = 2      # stoken 生成等待（秒）
 
+_PLATFORM_BROWSER_CONFIG: dict[str, dict[str, str]] = {
+	"zhipin": {
+		"login_page_url": LOGIN_PAGE_URL,
+		"home_url": HOME_URL,
+		"cookie_domain": "zhipin",
+		"success_cookie": "wt2",
+	},
+	"zhilian": {
+		"login_page_url": "https://passport.zhaopin.com/v5/login",
+		"home_url": "https://www.zhaopin.com/",
+		"cookie_domain": "zhaopin",
+		"success_cookie": "zp_token",
+	},
+}
+
+
+def _get_platform_config(platform: str) -> dict[str, str]:
+	config = _PLATFORM_BROWSER_CONFIG.get(platform)
+	if config is None:
+		raise ValueError(f"unsupported platform: {platform}")
+	return config
+
+
+def _extract_zhilian_client_id(page: Any) -> str:
+	try:
+		return cast("str", page.evaluate("""
+			() => {
+				const keys = ["x-zp-client-id", "x_zp_client_id", "clientId"];
+				for (const key of keys) {
+					const value = window.localStorage.getItem(key) || window.sessionStorage.getItem(key);
+					if (value) return value;
+				}
+				return '';
+			}
+		"""))
+	except Exception:
+		return ""
+
 
 def probe_cdp(cdp_url: str | None = None) -> str | None:
 	"""探测 CDP 是否可用，返回 WebSocket URL 或 None。"""
@@ -26,11 +64,16 @@ def probe_cdp(cdp_url: str | None = None) -> str | None:
 		return None
 
 
-def login_via_cdp(*, cdp_url: str | None = None, timeout: int = 120) -> dict[str, Any]:
+def login_via_cdp(*, cdp_url: str | None = None, timeout: int = 120, platform: str = "zhipin") -> dict[str, Any]:
 	"""
 	通过 CDP 连接用户 Chrome 扫码登录。
 	返回 token dict，失败抛异常。
 	"""
+	config = _get_platform_config(platform)
+	login_page_url = config["login_page_url"]
+	home_url = config["home_url"]
+	cookie_domain = config["cookie_domain"]
+	success_cookie = config["success_cookie"]
 	ws_url = probe_cdp(cdp_url)
 	if not ws_url:
 		raise ConnectionError("CDP 不可用，请先运行 boss-chrome 启动带调试端口的 Chrome")
@@ -43,7 +86,7 @@ def login_via_cdp(*, cdp_url: str | None = None, timeout: int = 120) -> dict[str
 
 	try:
 		page.goto(
-			f"{LOGIN_PAGE_URL}?ka=header-login",
+			login_page_url,
 			wait_until="commit", timeout=_NAV_TIMEOUT_MS,
 		)
 	except Exception:
@@ -54,8 +97,8 @@ def login_via_cdp(*, cdp_url: str | None = None, timeout: int = 120) -> dict[str
 	for i in range(timeout):
 		time.sleep(1)
 		cookies = ctx.cookies()
-		wt2 = [c for c in cookies if c["name"] == "wt2" and "zhipin" in c.get("domain", "")]
-		if wt2:
+		success = [c for c in cookies if c["name"] == success_cookie and cookie_domain in c.get("domain", "")]
+		if success:
 			print("[boss] 检测到登录成功！", file=sys.stderr)
 			break
 		if i > 0 and i % 15 == 0:
@@ -65,20 +108,33 @@ def login_via_cdp(*, cdp_url: str | None = None, timeout: int = 120) -> dict[str
 		pw.stop()
 		raise TimeoutError(f"CDP 扫码登录超时（{timeout}s）")
 
-	all_cookies = {c["name"]: c["value"] for c in ctx.cookies() if "zhipin" in c.get("domain", "")}
+	try:
+		page.goto(home_url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+	except Exception:
+		pass
+	all_cookies = {c["name"]: c["value"] for c in ctx.cookies() if cookie_domain in c.get("domain", "")}
 	ua = page.evaluate("navigator.userAgent")
+	x_zp_client_id = _extract_zhilian_client_id(page) if platform == "zhilian" else ""
 
 	page.close()
 	pw.stop()
 
-	return {"cookies": all_cookies, "stoken": "", "user_agent": ua}
+	result: dict[str, Any] = {"cookies": all_cookies, "stoken": "", "user_agent": ua}
+	if x_zp_client_id:
+		result["x_zp_client_id"] = x_zp_client_id
+	return result
 
 
-def login_via_browser(*, timeout: int = 120) -> dict[str, Any]:
+def login_via_browser(*, timeout: int = 120, platform: str = "zhipin") -> dict[str, Any]:
 	"""
 	使用 patchright（Playwright 反检测 fork）打开登录页。
 	双重检测登录成功：监听 API 响应 + 轮询 wt2 cookie。
 	"""
+	config = _get_platform_config(platform)
+	login_page_url = config["login_page_url"]
+	home_url = config["home_url"]
+	cookie_domain = config["cookie_domain"]
+	success_cookie = config["success_cookie"]
 	with sync_playwright() as p:
 		browser = p.chromium.launch(headless=False)
 		context = browser.new_context(
@@ -88,7 +144,7 @@ def login_via_browser(*, timeout: int = 120) -> dict[str, Any]:
 		)
 		page = context.new_page()
 
-		page.goto(LOGIN_PAGE_URL, wait_until="domcontentloaded")
+		page.goto(login_page_url, wait_until="domcontentloaded")
 		print("已打开 BOSS 直聘登录页。", file=sys.stderr)
 		print(f"请扫码或手机号登录（超时 {timeout} 秒）...", file=sys.stderr)
 
@@ -110,7 +166,7 @@ def login_via_browser(*, timeout: int = 120) -> dict[str, Any]:
 			# 也通过 cookie 检测（覆盖 API 匹配不上的情况）
 			try:
 				cookies_list = context.cookies()
-				if any(c["name"] == "wt2" for c in cookies_list):
+				if any(c["name"] == success_cookie and cookie_domain in c.get("domain", "") for c in cookies_list):
 					login_detected = True
 					break
 			except Exception:
@@ -125,21 +181,25 @@ def login_via_browser(*, timeout: int = 120) -> dict[str, Any]:
 		time.sleep(_POST_LOGIN_WAIT)
 
 		# 跳转主站提取完整 cookies 和 stoken
-		page.goto(HOME_URL, wait_until="domcontentloaded")
+		page.goto(home_url, wait_until="domcontentloaded")
 		page.wait_for_load_state("networkidle")
 
 		cookies_list = context.cookies()
-		cookies = {c["name"]: c["value"] for c in cookies_list}
+		cookies = {c["name"]: c["value"] for c in cookies_list if cookie_domain in c.get("domain", "")}
 		user_agent = page.evaluate("navigator.userAgent")
-		stoken = _extract_stoken(page)
+		stoken = _extract_stoken(page) if platform == "zhipin" else ""
+		x_zp_client_id = _extract_zhilian_client_id(page) if platform == "zhilian" else ""
 
 		browser.close()
 
-	return {
+	result: dict[str, Any] = {
 		"cookies": cookies,
 		"stoken": stoken,
 		"user_agent": user_agent,
 	}
+	if x_zp_client_id:
+		result["x_zp_client_id"] = x_zp_client_id
+	return result
 
 
 def refresh_stoken_via_cdp(cdp_url: str | None = None) -> str:

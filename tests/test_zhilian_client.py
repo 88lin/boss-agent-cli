@@ -1,181 +1,220 @@
-"""ZhilianClient 契约测试。
-
-Zhilian 内部 HTTP 客户端骨架，Week 2 真实现之前只提供类结构 / __init__ 签名 / 资源生命周期。
-所有 API 调用方法抛 NotImplementedError 并附 Issue #140 链接。
-"""
+"""ZhilianClient P0 契约测试。"""
 
 from __future__ import annotations
 
-import sys
 from unittest.mock import MagicMock
 
-import httpx
-import pytest
+from boss_agent_cli.api.zhilian_client import (
+	APPLY_URL,
+	CSRF_BOOTSTRAP_URL,
+	DETAIL_URL_TEMPLATE,
+	GREET_URL,
+	RECOMMEND_URL,
+	SEARCH_URL,
+	USER_INFO_URL,
+	ZhilianClient,
+	_extract_csrf_token,
+)
 
-from boss_agent_cli.api.zhilian_client import ZhilianClient
+
+class _StubAuth:
+	def __init__(self) -> None:
+		self.token = {
+			"cookies": {"zp_token": "token"},
+			"user_agent": "UA",
+			"x_zp_client_id": "client-id-1",
+		}
+
+	def get_token(self):
+		return self.token
+
+	def force_refresh(self, cdp_url=None):
+		self.token = {**self.token, "zp_token": "refreshed"}
 
 
 class TestZhilianClientStructure:
 	"""ZhilianClient 类结构对齐 BossClient 的公开面。"""
 
 	def test_can_instantiate_with_auth_manager(self) -> None:
-		client = ZhilianClient(MagicMock())
+		client = ZhilianClient(_StubAuth())
 		assert client is not None
 
 	def test_init_accepts_delay_keyword(self) -> None:
-		client = ZhilianClient(MagicMock(), delay=(2.0, 4.0))
+		client = ZhilianClient(_StubAuth(), delay=(2.0, 4.0))
 		assert client._delay == (2.0, 4.0)
 
 	def test_init_accepts_cdp_url_keyword(self) -> None:
-		client = ZhilianClient(MagicMock(), cdp_url="http://localhost:9222")
+		client = ZhilianClient(_StubAuth(), cdp_url="http://localhost:9222")
 		assert client._cdp_url == "http://localhost:9222"
 
 	def test_close_is_callable_and_idempotent(self) -> None:
-		client = ZhilianClient(MagicMock())
+		client = ZhilianClient(_StubAuth())
 		client.close()
 		client.close()  # 重复调用不抛错
+
+	def test_get_client_applies_auth_headers(self) -> None:
+		client = ZhilianClient(_StubAuth())
+		httpx_client = client._get_client()
+		assert httpx_client.headers["User-Agent"] == "UA"
+		assert httpx_client.headers["x-zp-client-id"] == "client-id-1"
+		assert httpx_client.cookies.get("zp_token") == "token"
 
 
 class TestZhilianClientContextManager:
 	"""with 上下文管理器支持。"""
 
 	def test_enter_returns_self(self) -> None:
-		client = ZhilianClient(MagicMock())
+		client = ZhilianClient(_StubAuth())
 		with client as c:
 			assert c is client
 
 	def test_exit_calls_close(self) -> None:
-		client = ZhilianClient(MagicMock())
+		client = ZhilianClient(_StubAuth())
 		with client:
 			assert not client._closed
 		assert client._closed
 
 
-class TestZhilianClientStubMethods:
-	"""Week 2 待实现方法抛清晰 NotImplementedError。"""
+class TestZhilianClientReadonlyMethods:
+	"""P0 只读能力参数构造正确。"""
 
 	def setup_method(self) -> None:
-		self.client = ZhilianClient(MagicMock())
+		self.client = ZhilianClient(_StubAuth())
+		self.client._request = MagicMock(return_value={"code": 200, "data": {}})
 
-	def test_search_jobs_raises(self) -> None:
-		with pytest.raises(NotImplementedError, match="Week 2"):
-			self.client.search_jobs("Python")
+	def test_search_jobs_minimal_params(self) -> None:
+		self.client.search_jobs("Python")
+		call = self.client._request.call_args
+		assert call.args == ("GET", SEARCH_URL)
+		assert call.kwargs["params"] == {"keyword": "Python", "pageNum": 1}
 
-	def test_job_detail_raises(self) -> None:
-		with pytest.raises(NotImplementedError, match="Week 2"):
-			self.client.job_detail("abc")
+	def test_search_jobs_maps_supported_filters(self) -> None:
+		self.client.search_jobs(
+			"Python",
+			page=2,
+			page_size=20,
+			city="530",
+			salary="20K-30K",
+			experience="3-5年",
+			education="本科",
+			scale="100-499人",
+			industry="互联网",
+			stage="A轮",
+			job_type="全职",
+		)
+		params = self.client._request.call_args.kwargs["params"]
+		assert params["keyword"] == "Python"
+		assert params["pageNum"] == 2
+		assert params["pageSize"] == 20
+		assert params["cityId"] == "530"
+		assert params["salary"] == "20K-30K"
+		assert params["workExp"] == "3-5年"
+		assert params["education"] == "本科"
+		assert params["companySize"] == "100-499人"
+		assert params["industry"] == "互联网"
+		assert params["financingStage"] == "A轮"
+		assert params["jobType"] == "全职"
 
-	def test_recommend_jobs_raises(self) -> None:
-		with pytest.raises(NotImplementedError, match="Week 2"):
-			self.client.recommend_jobs()
+	def test_job_detail_uses_path_param_url(self) -> None:
+		self.client.job_detail("job-1")
+		call = self.client._request.call_args
+		assert call.args == ("GET", DETAIL_URL_TEMPLATE.format(job_id="job-1"))
 
-	def test_user_info_raises(self) -> None:
-		with pytest.raises(NotImplementedError, match="Week 2"):
-			self.client.user_info()
+	def test_recommend_jobs_uses_page_num(self) -> None:
+		self.client.recommend_jobs(page=3)
+		call = self.client._request.call_args
+		assert call.args == ("GET", RECOMMEND_URL)
+		assert call.kwargs["params"] == {"pageNum": 3}
 
-	def test_error_messages_point_to_issue_140(self) -> None:
-		with pytest.raises(NotImplementedError) as exc_info:
-			self.client.user_info()
-		assert "#140" in str(exc_info.value)
+	def test_user_info_no_params(self) -> None:
+		self.client.user_info()
+		call = self.client._request.call_args
+		assert call.args == ("GET", USER_INFO_URL)
+
+	def test_greet_posts_with_csrf_header(self) -> None:
+		self.client.get_csrf_token = MagicMock(return_value="csrf-123")
+		self.client.greet("sec-1", "job-1", "hello")
+		call = self.client._request.call_args
+		assert call.args == ("POST", GREET_URL)
+		assert call.kwargs["data"] == {
+			"securityId": "sec-1",
+			"jobId": "job-1",
+			"message": "hello",
+		}
+		assert call.kwargs["headers"] == {"csrf-token": "csrf-123"}
+
+	def test_apply_posts_with_csrf_header(self) -> None:
+		self.client.get_csrf_token = MagicMock(return_value="csrf-123")
+		self.client.apply("sec-1", "job-1", lid="list-1")
+		call = self.client._request.call_args
+		assert call.args == ("POST", APPLY_URL)
+		assert call.kwargs["data"] == {
+			"securityId": "sec-1",
+			"jobId": "job-1",
+			"lid": "list-1",
+		}
+		assert call.kwargs["headers"] == {"csrf-token": "csrf-123"}
 
 
-class TestZhilianClientHttpxClient:
-	"""P0-1：`_get_httpx_client()` 基础认证头与生命周期（Issue #140）。"""
+class TestZhilianClientCsrf:
+	"""CSRF token 获取与缓存。"""
 
-	def _make_auth(
-		self,
-		*,
-		cookies: dict[str, str] | None = None,
-		user_agent: str | None = None,
-		client_id: str | None = None,
-	) -> MagicMock:
-		auth = MagicMock()
-		token: dict[str, object] = {"cookies": cookies or {}}
-		if user_agent is not None:
-			token["user_agent"] = user_agent
-		if client_id is not None:
-			token["x_zp_client_id"] = client_id
-		auth.get_token.return_value = token
-		return auth
+	def test_extract_csrf_token_from_meta(self) -> None:
+		html = '<html><head><meta content="csrf-123" name="csrf-token"></head></html>'
+		assert _extract_csrf_token(html) == "csrf-123"
 
-	def test_returns_httpx_client_instance(self) -> None:
-		client = ZhilianClient(self._make_auth())
-		http = client._get_httpx_client()
-		assert isinstance(http, httpx.Client)
+	def test_get_csrf_token_fetches_and_caches_value(self) -> None:
+		client = ZhilianClient(_StubAuth())
+		mock_httpx = MagicMock()
+		mock_resp = MagicMock()
+		mock_resp.status_code = 200
+		mock_resp.text = '<meta name="csrf-token" content="csrf-123">'
+		mock_resp.cookies.items.return_value = []
+		mock_resp.raise_for_status.return_value = None
+		mock_httpx.get.return_value = mock_resp
+		client._get_client = MagicMock(return_value=mock_httpx)
+		client._merge_cookies = MagicMock()
+		client._throttle.wait = MagicMock()
+		client._throttle.mark = MagicMock()
 
-	def test_lazy_init_returns_same_instance(self) -> None:
-		client = ZhilianClient(self._make_auth())
-		first = client._get_httpx_client()
-		second = client._get_httpx_client()
-		assert first is second
+		assert client.get_csrf_token() == "csrf-123"
+		assert client.get_csrf_token() == "csrf-123"
+		mock_httpx.get.assert_called_once_with(
+			CSRF_BOOTSTRAP_URL,
+			headers={
+				"Referer": CSRF_BOOTSTRAP_URL,
+				"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+			},
+		)
 
-	def test_cookies_come_from_token(self) -> None:
-		auth = self._make_auth(cookies={"zp_token": "T", "x-zp-client-id": "ID"})
-		client = ZhilianClient(auth)
-		http = client._get_httpx_client()
-		assert http.cookies.get("zp_token") == "T"
-		assert http.cookies.get("x-zp-client-id") == "ID"
+	def test_get_csrf_token_force_refresh_refetches_page(self) -> None:
+		client = ZhilianClient(_StubAuth())
+		client._fetch_csrf_token = MagicMock(side_effect=["csrf-1", "csrf-2"])
 
-	def test_user_agent_from_token(self) -> None:
-		auth = self._make_auth(user_agent="Mozilla/5.0 (TestUA) Chrome/123")
-		client = ZhilianClient(auth)
-		http = client._get_httpx_client()
-		assert http.headers.get("User-Agent") == "Mozilla/5.0 (TestUA) Chrome/123"
+		assert client.get_csrf_token() == "csrf-1"
+		assert client.get_csrf_token(force_refresh=True) == "csrf-2"
+		assert client._fetch_csrf_token.call_count == 2
 
-	def test_default_user_agent_when_token_missing(self) -> None:
-		client = ZhilianClient(self._make_auth())
-		http = client._get_httpx_client()
-		ua = http.headers.get("User-Agent") or ""
-		assert "Mozilla" in ua  # 兜底有合理 UA
+	def test_get_csrf_token_raises_when_meta_missing(self) -> None:
+		client = ZhilianClient(_StubAuth())
+		mock_httpx = MagicMock()
+		mock_resp = MagicMock()
+		mock_resp.status_code = 200
+		mock_resp.text = "<html></html>"
+		mock_resp.cookies.items.return_value = []
+		mock_resp.raise_for_status.return_value = None
+		mock_httpx.get.return_value = mock_resp
+		client._get_client = MagicMock(return_value=mock_httpx)
+		client._merge_cookies = MagicMock()
+		client._throttle.wait = MagicMock()
+		client._throttle.mark = MagicMock()
 
-	def test_sec_ch_ua_platform_present(self) -> None:
-		client = ZhilianClient(self._make_auth())
-		http = client._get_httpx_client()
-		platform_header = http.headers.get("sec-ch-ua-platform")
-		assert platform_header is not None
-		assert platform_header.startswith('"') and platform_header.endswith('"')
-		expected_map = {"win32": '"Windows"', "linux": '"Linux"', "darwin": '"macOS"'}
-		assert platform_header == expected_map.get(sys.platform, '"macOS"')
-
-	def test_x_zp_client_id_header_when_token_provides(self) -> None:
-		auth = self._make_auth(client_id="abc-123")
-		client = ZhilianClient(auth)
-		http = client._get_httpx_client()
-		assert http.headers.get("x-zp-client-id") == "abc-123"
-
-	def test_referer_and_origin_headers_zhaopin(self) -> None:
-		client = ZhilianClient(self._make_auth())
-		http = client._get_httpx_client()
-		assert "zhaopin.com" in (http.headers.get("Referer") or "")
-		assert "zhaopin.com" in (http.headers.get("Origin") or "")
-
-	def test_follow_redirects_and_timeout(self) -> None:
-		client = ZhilianClient(self._make_auth())
-		http = client._get_httpx_client()
-		assert http.follow_redirects is True
-		# httpx Timeout 对象支持 read 属性
-		assert http.timeout.read == 30
-
-	def test_close_releases_httpx_client(self) -> None:
-		client = ZhilianClient(self._make_auth())
-		http = client._get_httpx_client()
-		assert http.is_closed is False
-		client.close()
-		assert http.is_closed is True
-		assert client._closed is True
-
-	def test_close_is_idempotent_after_httpx_init(self) -> None:
-		client = ZhilianClient(self._make_auth())
-		client._get_httpx_client()
-		client.close()
-		client.close()  # 第二次不抛错
-
-	def test_context_manager_closes_httpx_client(self) -> None:
-		auth = self._make_auth()
-		with ZhilianClient(auth) as client:
-			http = client._get_httpx_client()
-			assert http.is_closed is False
-		assert http.is_closed is True
+		try:
+			client.get_csrf_token()
+		except RuntimeError as exc:
+			assert "csrf-token" in str(exc)
+		else:
+			raise AssertionError("expected RuntimeError when csrf meta is missing")
 
 
 class TestPlatformInstanceRoutesToClient:

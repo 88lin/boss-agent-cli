@@ -16,7 +16,7 @@ def reply_cmd(ctx: click.Context, friend_id: int, message: str) -> None:
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	with get_recruiter_platform_instance(ctx, auth) as platform:
 		result = platform.send_message(friend_id, message)
 		data = {

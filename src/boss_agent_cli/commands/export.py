@@ -25,7 +25,7 @@ def export_cmd(ctx: click.Context, query: str, city: str | None, salary: str | N
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	with get_platform_instance(ctx, auth) as platform:
 		all_items: list[dict[str, Any]] = []
 		page = 1
@@ -34,8 +34,8 @@ def export_cmd(ctx: click.Context, query: str, city: str | None, salary: str | N
 		while len(all_items) < count and page <= max_pages:
 			logger.info(f"正在获取第 {page} 页...")
 			raw = platform.search_jobs(query, city=city, salary=salary, page=page)
-			zp_data = raw.get("zpData", {})
-			job_list = zp_data.get("jobList", [])
+			platform_data = platform.unwrap_data(raw) or {}
+			job_list = platform_data.get("jobList", [])
 			if not job_list:
 				break
 
@@ -45,7 +45,7 @@ def export_cmd(ctx: click.Context, query: str, city: str | None, salary: str | N
 				item = JobItem.from_api(raw_item)
 				all_items.append(item.to_dict())
 
-			if not zp_data.get("hasMore", False):
+			if not platform_data.get("hasMore", False):
 				break
 			page += 1
 

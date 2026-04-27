@@ -107,7 +107,7 @@ def search_cmd(ctx: click.Context, query: str, preset: str | None, city: str | N
 				)
 				return
 
-		auth = AuthManager(data_dir, logger=logger)
+		auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 		with get_platform_instance(ctx, auth) as platform:
 			max_pages = 5 if welfare_conditions else 1
 			pipeline_result = run_search_pipeline(

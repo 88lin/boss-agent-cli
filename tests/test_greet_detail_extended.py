@@ -18,7 +18,7 @@ _PATCHES = {
 }
 
 
-def _invoke_greet(*args, tmp_path, cache_greeted=False, greet_side_effect=None):
+def _invoke_greet(*args, tmp_path, cache_greeted=False, greet_side_effect=None, greet_result=None, is_success=True, parse_error=("UNKNOWN", "")):
 	runner = CliRunner()
 	with (
 		patch(_PATCHES["auth"]),
@@ -33,6 +33,10 @@ def _invoke_greet(*args, tmp_path, cache_greeted=False, greet_side_effect=None):
 		mock_platform = MagicMock()
 		if greet_side_effect:
 			mock_platform.greet.side_effect = greet_side_effect
+		else:
+			mock_platform.greet.return_value = greet_result if greet_result is not None else {"code": 0, "zpData": {}}
+		mock_platform.is_success.return_value = is_success
+		mock_platform.parse_error.return_value = parse_error
 		mock_get_platform.return_value.__enter__ = lambda s: mock_platform
 		mock_get_platform.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -55,6 +59,19 @@ def test_greet_success(tmp_path):
 	assert parsed["data"]["security_id"] == "sid1"
 	mock_client.greet.assert_called_once_with("sid1", "jid1", "")
 	mock_cache.record_greet.assert_called_once_with("sid1", "jid1")
+
+
+def test_greet_failure_does_not_record_cache(tmp_path):
+	"""业务失败码不应误记成功。"""
+	code, parsed, mock_cache, mock_client = _invoke_greet(
+		"greet", "sid1", "jid1", tmp_path=tmp_path,
+		greet_result={"code": 401, "message": "unauthorized"},
+		is_success=False,
+		parse_error=("AUTH_EXPIRED", "unauthorized"),
+	)
+	assert code == 1
+	assert parsed["error"]["code"] == "AUTH_EXPIRED"
+	mock_cache.record_greet.assert_not_called()
 
 
 def test_greet_already_greeted(tmp_path):
@@ -122,6 +139,7 @@ def _invoke_batch_greet(*args, tmp_path, search_result=None, greeted_ids=None):
 				 "activeTimeDesc": "今日活跃"},
 			]},
 		}
+		mock_client.unwrap_data.side_effect = lambda payload: payload.get("zpData") if "zpData" in payload else payload.get("data")
 		mock_client_cls.return_value.__enter__ = lambda s: mock_client
 		mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -212,6 +230,9 @@ def _invoke_detail(*args, tmp_path, detail_result=None, cache_job_id=None):
 			"brandName": "字节跳动", "bossName": "张经理",
 			"bossTitle": "技术总监", "activeTimeDesc": "刚刚活跃",
 		}}}
+		def unwrap_data_side_effect(payload):
+			return payload.get("zpData")
+		mock_client.unwrap_data.side_effect = unwrap_data_side_effect
 		mock_client_cls.return_value.__enter__ = lambda s: mock_client
 		mock_client_cls.return_value.__exit__ = MagicMock(return_value=False)
 

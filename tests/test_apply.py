@@ -36,6 +36,42 @@ def test_apply_success(mock_cache_cls, mock_auth_cls, mock_get_platform):
 @patch("boss_agent_cli.commands.apply.get_platform_instance")
 @patch("boss_agent_cli.commands.apply.AuthManager")
 @patch("boss_agent_cli.commands.apply.CacheStore")
+def test_apply_success_for_zhilian_http_style_code(mock_cache_cls, mock_auth_cls, mock_get_platform):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_applied.return_value = False
+	mock_platform = _ctx_mock(mock_get_platform)
+	mock_platform.apply.return_value = {"code": 200, "data": {}}
+	mock_platform.is_success.return_value = True
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["--json", "apply", "sec_001", "job_001"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["ok"] is True
+	mock_cache.record_apply.assert_called_once_with("sec_001", "job_001")
+
+
+@patch("boss_agent_cli.commands.apply.get_platform_instance")
+@patch("boss_agent_cli.commands.apply.AuthManager")
+@patch("boss_agent_cli.commands.apply.CacheStore")
+def test_apply_zhilian_hints_use_platform_specific_commands(mock_cache_cls, mock_auth_cls, mock_get_platform):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_applied.return_value = False
+	mock_platform = _ctx_mock(mock_get_platform)
+	mock_platform.apply.return_value = {"code": 200, "data": {}}
+	mock_platform.is_success.return_value = True
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["--json", "--platform", "zhilian", "apply", "sec_001", "job_001"])
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["hints"]["next_actions"][0] == "boss --platform zhilian me --section deliver"
+	assert parsed["hints"]["next_actions"][1] == "boss --platform zhilian chat"
+
+
+@patch("boss_agent_cli.commands.apply.get_platform_instance")
+@patch("boss_agent_cli.commands.apply.AuthManager")
+@patch("boss_agent_cli.commands.apply.CacheStore")
 def test_apply_duplicate_is_blocked(mock_cache_cls, mock_auth_cls, mock_get_platform):
 	mock_cache = _ctx_mock(mock_cache_cls)
 	mock_cache.is_applied.return_value = True
@@ -50,11 +86,28 @@ def test_apply_duplicate_is_blocked(mock_cache_cls, mock_auth_cls, mock_get_plat
 @patch("boss_agent_cli.commands.apply.get_platform_instance")
 @patch("boss_agent_cli.commands.apply.AuthManager")
 @patch("boss_agent_cli.commands.apply.CacheStore")
+def test_apply_duplicate_zhilian_hints_use_platform_specific_commands(mock_cache_cls, mock_auth_cls, mock_get_platform):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_applied.return_value = True
+
+	runner = CliRunner()
+	result = runner.invoke(cli, ["--json", "--platform", "zhilian", "apply", "sec_001", "job_001"])
+	assert result.exit_code == 1
+	parsed = json.loads(result.output)
+	assert parsed["hints"]["next_actions"][0] == "boss --platform zhilian me --section deliver"
+	assert parsed["hints"]["next_actions"][1] == "boss --platform zhilian chat"
+
+
+@patch("boss_agent_cli.commands.apply.get_platform_instance")
+@patch("boss_agent_cli.commands.apply.AuthManager")
+@patch("boss_agent_cli.commands.apply.CacheStore")
 def test_apply_failure_does_not_record_local_state(mock_cache_cls, mock_auth_cls, mock_get_platform):
 	mock_cache = _ctx_mock(mock_cache_cls)
 	mock_cache.is_applied.return_value = False
 	mock_platform = _ctx_mock(mock_get_platform)
 	mock_platform.apply.return_value = {"code": 1, "message": "失败"}
+	mock_platform.is_success.return_value = False
+	mock_platform.parse_error.return_value = ("NETWORK_ERROR", "失败")
 
 	runner = CliRunner()
 	result = runner.invoke(cli, ["apply", "sec_001", "job_001"])

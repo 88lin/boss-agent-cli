@@ -12,9 +12,10 @@ from boss_agent_cli.commands.recruiter import candidates as recruiter_candidates
 from boss_agent_cli.commands.recruiter import reply as recruiter_reply
 from boss_agent_cli.commands.recruiter import request_resume as recruiter_request_resume
 from boss_agent_cli.config import load_config
+from boss_agent_cli.display import handle_error_output
 from boss_agent_cli.hooks import create_hook_bus
 from boss_agent_cli.output import Logger
-from boss_agent_cli.platforms import list_platforms
+from boss_agent_cli.platforms import list_platforms, list_recruiter_platforms
 
 
 @click.group(context_settings={"allow_interspersed_args": False})
@@ -102,6 +103,22 @@ cli.add_command(stats.stats_cmd, "stats")
 @click.pass_context
 def hr_group(ctx: click.Context) -> None:
 	ctx.obj["role"] = "recruiter"
+	platform_name = ctx.obj.get("platform") or "zhipin"
+	recruiter_name = f"{platform_name}-recruiter"
+	supported = list_recruiter_platforms()
+	if recruiter_name not in supported:
+		handle_error_output(
+			ctx,
+			"hr",
+			code="INVALID_PARAM",
+			message=(
+				f"招聘者模式暂不支持平台 {platform_name!r}；"
+				f"当前仅支持: {', '.join(supported)}"
+			),
+			recoverable=True,
+			recovery_action="boss --platform zhipin hr ...",
+		)
+		raise SystemExit(1)
 
 cli.add_command(hr_group, "hr")
 hr_group.add_command(recruiter_applications.applications_cmd, "applications")

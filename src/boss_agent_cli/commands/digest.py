@@ -31,13 +31,15 @@ from boss_agent_cli.pipeline_state import build_pipeline_items, select_follow_up
 def digest_cmd(ctx: click.Context, days_stale: int, now_ts_ms: int | None, output_format: str, output_path: Path | None) -> None:
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 
 	with get_platform_instance(ctx, auth) as platform:
 		friend_resp = platform.friend_list(page=1)
-		chat_items = friend_resp.get("zpData", {}).get("result") or friend_resp.get("zpData", {}).get("friendList") or []
+		friend_data = platform.unwrap_data(friend_resp) or {}
+		chat_items = friend_data.get("result") or friend_data.get("friendList") or []
 		interview_resp = platform.interview_data()
-		interview_items = interview_resp.get("zpData", {}).get("interviewList") or []
+		interview_data = platform.unwrap_data(interview_resp) or {}
+		interview_items = interview_data.get("interviewList") or []
 
 	items = build_pipeline_items(
 		chat_items=chat_items,

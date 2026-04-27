@@ -19,14 +19,21 @@ def recommend_cmd(ctx: click.Context, page: int, with_score: bool) -> None:
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	with get_platform_instance(ctx, auth) as platform:
 		with CacheStore(data_dir / "cache" / "boss_agent.db") as cache:
-			expect_data = platform.resume_expect().get("zpData", {}) if with_score else None
+			expect_data = None
+			if with_score:
+				try:
+					expect_resp = platform.resume_expect()
+				except NotImplementedError:
+					expect_data = None
+				else:
+					expect_data = platform.unwrap_data(expect_resp) or {}
 
 			raw = platform.recommend_jobs(page=page)
-			zp_data = raw.get("zpData", {})
-			job_list = zp_data.get("jobList", [])
+			platform_data = platform.unwrap_data(raw) or {}
+			job_list = platform_data.get("jobList", [])
 
 			items = []
 			for raw_item in job_list:
@@ -41,7 +48,7 @@ def recommend_cmd(ctx: click.Context, page: int, with_score: bool) -> None:
 
 		pagination = {
 			"page": page,
-			"has_more": zp_data.get("hasMore", False),
+			"has_more": platform_data.get("hasMore", False),
 			"total": len(items),
 		}
 		hints = {

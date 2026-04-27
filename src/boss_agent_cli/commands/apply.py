@@ -3,7 +3,7 @@ import click
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.cache.store import CacheStore
 from boss_agent_cli.commands._platform import get_platform_instance
-from boss_agent_cli.display import handle_auth_errors, handle_error_output, handle_output, render_message_panel
+from boss_agent_cli.display import boss_command_for_ctx, handle_auth_errors, handle_error_output, handle_output, render_message_panel
 
 
 @click.command("apply")
@@ -24,18 +24,24 @@ def apply_cmd(ctx: click.Context, security_id: str, job_id: str, lid: str) -> No
 				"apply",
 				code="ALREADY_APPLIED",
 				message="已对该职位发起过投递/立即沟通",
-				hints={"next_actions": ["boss me --section deliver", "boss chat"]},
+				hints={
+					"next_actions": [
+						boss_command_for_ctx(ctx, "me --section deliver"),
+						boss_command_for_ctx(ctx, "chat"),
+					]
+				},
 			)
 			return
 
-		auth = AuthManager(data_dir, logger=logger)
+		auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 		with get_platform_instance(ctx, auth) as platform:
 			resp = platform.apply(security_id, job_id, lid=lid)
-			if resp.get("code") not in (None, 0):
+			if not platform.is_success(resp):
+				error_code, _ = platform.parse_error(resp)
 				handle_error_output(
 					ctx,
 					"apply",
-					code="NETWORK_ERROR",
+					code=error_code if error_code != "UNKNOWN" else "NETWORK_ERROR",
 					message=resp.get("message") or "投递/立即沟通提交失败",
 					recoverable=True,
 					recovery_action="重试",
@@ -54,5 +60,10 @@ def apply_cmd(ctx: click.Context, security_id: str, job_id: str, lid: str) -> No
 			"message": "投递/立即沟通已提交",
 		},
 		render=lambda d: render_message_panel(d, title="apply"),
-		hints={"next_actions": ["boss me --section deliver", "boss chat"]},
+		hints={
+			"next_actions": [
+				boss_command_for_ctx(ctx, "me --section deliver"),
+				boss_command_for_ctx(ctx, "chat"),
+			]
+		},
 	)

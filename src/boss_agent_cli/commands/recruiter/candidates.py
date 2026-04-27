@@ -20,13 +20,13 @@ def candidates_cmd(ctx: click.Context, query: str, city: str | None, job_id: str
 	data_dir = ctx.obj["data_dir"]
 	logger = ctx.obj["logger"]
 
-	auth = AuthManager(data_dir, logger=logger)
+	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	with get_recruiter_platform_instance(ctx, auth) as platform:
 		result = platform.search_geeks(
 			query, city=city, page=page, job_id=job_id,
 			experience=experience, degree=degree,
 		)
-		data = result.get("zpData", {})
+		data = platform.unwrap_data(result) or {}
 		handle_output(
 			ctx, "recruiter-candidates", data,
 			hints={"next_actions": [

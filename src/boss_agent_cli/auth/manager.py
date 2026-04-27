@@ -17,17 +17,22 @@ class TokenRefreshFailed(Exception):
 
 
 class AuthManager:
-	def __init__(self, data_dir: Path, *, logger: Logger | None = None) -> None:
-		self._store = TokenStore(data_dir / "auth")
+	def __init__(self, data_dir: Path, *, logger: Logger | None = None, platform: str = "zhipin") -> None:
+		self._platform = platform or "zhipin"
+		auth_dir = data_dir / "auth" if self._platform == "zhipin" else data_dir / "auth" / self._platform
+		self._store = TokenStore(auth_dir)
 		self._token: dict[str, Any] | None = None
 		self._logger = logger or Logger()
+
+	def _login_action(self) -> str:
+		return "boss --platform zhilian login" if self._platform == "zhilian" else "boss login"
 
 	def get_token(self) -> dict[str, Any]:
 		if self._token is not None:
 			return self._token
 		self._token = self._store.load()
 		if self._token is None:
-			raise AuthRequired("未登录，请先执行 boss login")
+			raise AuthRequired(f"未登录，请先执行 {self._login_action()}")
 		return self._token
 
 	def login(
@@ -49,7 +54,7 @@ class AuthManager:
 		if force_cdp:
 			# --cdp 强制模式：跳过 Cookie，CDP 不可用直接抛异常
 			self._logger.info("强制 CDP 模式，跳过 Cookie 提取")
-			token = login_via_cdp(cdp_url=cdp_url, timeout=timeout)
+			token = login_via_cdp(cdp_url=cdp_url, timeout=timeout, platform=self._platform)
 			method = "CDP 扫码"
 			self._store.save(token)
 			self._token = token
@@ -57,8 +62,8 @@ class AuthManager:
 
 		# 第一步：尝试从本地浏览器提取 Cookie
 		self._logger.info("尝试从本地浏览器提取 Cookie...")
-		token = extract_cookies(cookie_source)
-		if token and token.get("cookies", {}).get("wt2"):
+		token = extract_cookies(cookie_source, platform=self._platform)
+		if token and self._has_primary_cookie(token):
 			if self._verify_cookie(token):
 				self._store.save(token)
 				self._token = token
@@ -72,7 +77,7 @@ class AuthManager:
 		if probe_cdp(cdp_url):
 			self._logger.info("检测到 CDP 可用，尝试 CDP 登录...")
 			try:
-				token = login_via_cdp(cdp_url=cdp_url, timeout=timeout)
+				token = login_via_cdp(cdp_url=cdp_url, timeout=timeout, platform=self._platform)
 				method = "CDP 扫码"
 				self._store.save(token)
 				self._token = token
@@ -82,31 +87,52 @@ class AuthManager:
 		else:
 			self._logger.info("CDP 不可用，尝试 QR 纯 httpx 登录")
 
-		# 第三步：QR 纯 httpx 登录（无需浏览器）
-		try:
-			self._logger.info("尝试 QR 纯 httpx 登录...")
-			token = qr_login_httpx(timeout=timeout)
-			method = "QR httpx 登录"
-			self._store.save(token)
-			self._token = token
-			return {**token, "_method": method}
-		except Exception as e:
-			self._logger.info(f"QR httpx 登录失败（{e}），降级到 patchright")
+		# 第三步：QR 纯 httpx 登录（仅 zhipin）
+		if self._platform == "zhipin":
+			try:
+				self._logger.info("尝试 QR 纯 httpx 登录...")
+				token = qr_login_httpx(timeout=timeout)
+				method = "QR httpx 登录"
+				self._store.save(token)
+				self._token = token
+				return {**token, "_method": method}
+			except Exception as e:
+				self._logger.info(f"QR httpx 登录失败（{e}），降级到 patchright")
 
 		# 第四步：patchright 扫码（兜底）
-		token = login_via_browser(timeout=timeout)
+		token = login_via_browser(timeout=timeout, platform=self._platform)
 		method = "扫码登录"
 		self._store.save(token)
 		self._token = token
 		return {**token, "_method": method}
 
+	def _has_primary_cookie(self, token: dict[str, Any]) -> bool:
+		cookies = token.get("cookies", {})
+		primary_cookie = "wt2" if self._platform == "zhipin" else "zp_token"
+		return bool(cookies.get(primary_cookie))
+
 	def _verify_cookie(self, token: dict[str, Any]) -> bool:
-		"""验证 Cookie 是否有效（不依赖 stoken，直接用 Cookie 请求用户信息）"""
+		"""验证 Cookie 是否有效。"""
 		try:
 			import httpx
+			if self._platform == "zhilian":
+				from boss_agent_cli.api.zhilian_client import USER_INFO_URL
+				headers = {
+					"User-Agent": token.get("user_agent") or "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+					"Referer": "https://i.zhaopin.com/",
+				}
+				if client_id := token.get("x_zp_client_id") or token.get("client_id"):
+					headers["x-zp-client-id"] = str(client_id)
+				resp = httpx.get(
+					USER_INFO_URL,
+					cookies=token.get("cookies", {}),
+					headers=headers,
+					timeout=10,
+				)
+				data = resp.json()
+				return bool(data.get("code") == 200)
+
 			from boss_agent_cli.api import endpoints
-			# 不传 stoken——user_info 接口即使 stoken 为空/错误也能返回用户信息
-			# 只要 Cookie（wt2）有效就会返回 code=0
 			resp = httpx.get(
 				endpoints.USER_INFO_URL,
 				cookies=token.get("cookies", {}),
@@ -128,6 +154,16 @@ class AuthManager:
 				raise TokenRefreshFailed("无法刷新 Token，请重新登录")
 			self._logger.info("Token 过期，正在静默刷新...")
 			try:
+				if self._platform == "zhilian":
+					refreshed = extract_cookies(None, platform=self._platform)
+					if not refreshed or not self._verify_cookie(refreshed):
+						refreshed = login_via_cdp(cdp_url=cdp_url, timeout=30, platform=self._platform)
+					if not refreshed or not self._verify_cookie(refreshed):
+						raise TokenRefreshFailed("智联登录态刷新失败，请重新登录")
+					self._store.save(refreshed)
+					self._token = refreshed
+					return
+
 				# CDP 优先：指纹一致，不会被 BOSS 直聘拒绝
 				if probe_cdp(cdp_url):
 					self._logger.info("检测到 CDP，使用 CDP 刷新 stoken")

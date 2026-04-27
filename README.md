@@ -85,7 +85,7 @@ boss digest                                                  # 每日汇报
 
 ### 平台与集成基础
 
-- `🔌 多平台抽象`：`Platform` / `RecruiterPlatform` 双注册表已落地，BOSS 直聘可用、智联招聘骨架已接入。命令：`--platform zhipin|zhilian`
+- `🔌 多平台抽象`：`Platform` / `RecruiterPlatform` 双注册表已落地；BOSS 直聘求职者/招聘者均可用，智联招聘已接通求职者侧包络与命令兼容。命令：`--platform zhipin|zhilian`
 - `📤 结构化输出`：stdout 只输出 JSON 信封，适合 CLI 编排、Shell Agent、MCP 和 Python SDK。命令：`schema` `export`
 - `🧩 Agent 接入`：同一套能力可通过 Skill、subprocess、MCP、Python SDK 四种路径暴露给 Agent。文档：`docs/agent-quickstart.md` `docs/agent-hosts.md`
 
@@ -130,7 +130,7 @@ uv run patchright install chromium
 # 1. 环境自检
 boss doctor
 
-# 2. 登录（自动四级降级）
+# 2. 登录（按平台选择链路）
 boss login
 
 # 3. 验证登录态
@@ -167,14 +167,17 @@ boss hr jobs list                     # 我发布的职位
 
 ## 🔐 登录链路
 
-`boss login` 采用**四级降级策略**，适配不同环境：
+`boss login` 会按当前平台选择登录链路：
 
-| 级别 | 方式 | 说明 | 需要浏览器？ |
-|:---:|------|------|:---:|
-| 1 | **Cookie 提取** | 从本地 Chrome/Firefox/Edge 等 10+ 浏览器免扫码提取 | 否 |
-| 2 | **CDP 登录** | 复用带 `--remote-debugging-port` 的 Chrome | 需 Chrome |
-| 3 | **QR httpx** | 纯 HTTP 二维码扫码，无需安装任何浏览器 | 否 |
-| 4 | **patchright** | 反检测 Chromium 兜底 | 需 Chromium |
+| 平台 | 登录链路 | 说明 |
+|------|----------|------|
+| `zhipin` | **Cookie 提取 → CDP → QR httpx → patchright** | 保留现有四级降级链路 |
+| `zhilian` | **Cookie 提取 → CDP → 浏览器登录** | 当前优先复用本地浏览器登录态；无 QR httpx 分支 |
+
+补充说明：
+- `boss login` 默认按当前 `--platform` / 配置文件里的 `platform` 工作
+- `boss --platform zhilian login` 已可用，但目前只覆盖**求职者侧**认证链路
+- `boss --platform zhilian hr ...` 仍不支持，招聘者侧继续追踪 [Issue #140](https://github.com/can4hou6joeng4/boss-agent-cli/issues/140)
 
 <details>
 <summary>📖 CDP 启动示例</summary>
@@ -217,6 +220,10 @@ boss hr applications
 boss hr candidates "Golang"
 ```
 
+注意：
+- `boss hr ...` 当前仅支持默认招聘者平台 `zhipin-recruiter`
+- 若当前平台是 `zhilian`，CLI 会在入口直接提示切回 `boss --platform zhipin hr ...`
+
 ### 多平台抽象
 
 `Platform` / `RecruiterPlatform` 双注册表让命令层不耦合具体平台协议：
@@ -224,7 +231,7 @@ boss hr candidates "Golang"
 | 平台 | 求职者 | 招聘者 | 状态 |
 |------|:------:|:------:|------|
 | BOSS 直聘 (`zhipin`) | ✅ | ✅ | 默认 |
-| 智联招聘 (`zhilian`) | 🟡 骨架 | — | 真实现追踪 [Issue #140](https://github.com/can4hou6joeng4/boss-agent-cli/issues/140) |
+| 智联招聘 (`zhilian`) | 🟡 包络与命令兼容已接通 | — | 招聘者侧未接入，继续追踪 [Issue #140](https://github.com/can4hou6joeng4/boss-agent-cli/issues/140) |
 
 ```bash
 # 指定平台
@@ -537,7 +544,7 @@ CLI (Click)
     │
     ├── Platform 抽象层（多平台注册表）
     │       ├── BossPlatform (求职者) / BossRecruiterPlatform (招聘者)
-    │       └── ZhilianPlatform (骨架已接入，真实现 tracking Issue #140)
+    │       └── ZhilianPlatform (求职者侧包络与命令兼容已接通，招聘者侧未接入)
     │
     ├── BossClient / BossRecruiterClient ── httpx (低风险) + 浏览器 (高风险) 双通道
     │       ├── RequestThrottle (高斯延迟 + 突发惩罚)
