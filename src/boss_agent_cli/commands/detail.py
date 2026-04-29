@@ -9,6 +9,8 @@ from boss_agent_cli.commands._platform import get_platform_instance
 from boss_agent_cli.display import boss_command_for_ctx, handle_auth_errors, handle_error_output, handle_output, render_job_detail
 from boss_agent_cli.platforms import Platform
 
+NOT_SUPPORTED_RECOVERY_ACTION = "切换平台或调整命令参数后重试"
+
 
 @click.command("detail")
 @click.argument("security_id")
@@ -40,15 +42,18 @@ def detail_cmd(ctx: click.Context, security_id: str, lid: str, job_id: str) -> N
 				result = None
 		if result is None:
 			result, browser_error = _detail_via_browser(platform, security_id, lid, data_dir)
-			last_error = browser_error or last_error
+			if browser_error and (last_error is None or browser_error[0] != "NOT_SUPPORTED"):
+				last_error = browser_error
 
 	if result is None:
 		if last_error:
+			recoverable = last_error[0] == "NOT_SUPPORTED"
 			handle_error_output(
 				ctx, "detail",
 				code=last_error[0],
 				message=last_error[1],
-				recoverable=False,
+				recoverable=recoverable,
+				recovery_action=NOT_SUPPORTED_RECOVERY_ACTION if recoverable else None,
 			)
 			return
 		handle_error_output(
@@ -108,7 +113,10 @@ def _detail_via_httpx(platform: Platform, security_id: str, job_id: str, data_di
 
 def _detail_via_browser(platform: Platform, security_id: str, lid: str, data_dir: Path) -> tuple[dict[str, Any] | None, tuple[str, str] | None]:
 	"""兜底通道：通过浏览器 job_card 获取职位详情"""
-	raw = platform.job_card(security_id, lid)
+	try:
+		raw = platform.job_card(security_id, lid)
+	except NotImplementedError as exc:
+		return None, ("NOT_SUPPORTED", str(exc) or "当前平台不支持职位详情兜底能力")
 	if not platform.is_success(raw):
 		code, message = platform.parse_error(raw)
 		return None, (code, message or "职位详情获取失败")

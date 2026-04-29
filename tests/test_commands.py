@@ -420,6 +420,25 @@ def test_recommend_with_score_reports_expect_error(mock_auth_cls, mock_client_cl
 	assert parsed["error"]["message"] == "stoken expired"
 
 
+@patch("boss_agent_cli.commands.recommend.CacheStore")
+@patch("boss_agent_cli.commands.recommend.get_platform_instance")
+@patch("boss_agent_cli.commands.recommend.AuthManager")
+def test_recommend_with_score_reports_not_supported(mock_auth_cls, mock_client_cls, mock_cache_cls):
+	mock_cache = _ctx_mock(mock_cache_cls)
+	mock_cache.is_greeted.return_value = False
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.resume_expect.side_effect = NotImplementedError("当前平台不支持求职期望能力")
+	runner = CliRunner()
+	result = runner.invoke(cli, ["recommend", "--with-score"])
+	assert result.exit_code == 1
+	parsed = json.loads(result.output)
+	assert parsed["error"]["code"] == "NOT_SUPPORTED"
+	assert parsed["error"]["message"] == "当前平台不支持求职期望能力"
+	assert parsed["error"]["recoverable"] is True
+	assert parsed["error"]["recovery_action"] == "切换平台或调整命令参数后重试"
+	mock_client.recommend_jobs.assert_not_called()
+
+
 @patch("boss_agent_cli.commands.search.run_search_pipeline")
 @patch("boss_agent_cli.commands.search.CacheStore")
 @patch("boss_agent_cli.commands.search.AuthManager")
@@ -791,6 +810,24 @@ def test_chat_reports_friend_list_error(mock_auth_cls, mock_client_cls):
 	parsed = json.loads(result.output)
 	assert parsed["error"]["code"] == "TOKEN_REFRESH_FAILED"
 	assert parsed["error"]["message"] == "stoken expired"
+	assert parsed["error"]["recoverable"] is True
+	assert parsed["error"]["recovery_action"] == "boss login"
+
+
+@patch("boss_agent_cli.commands.chat.get_platform_instance")
+@patch("boss_agent_cli.commands.chat.AuthManager")
+def test_chat_reports_not_supported_when_friend_list_missing(mock_auth_cls, mock_client_cls):
+	mock_auth_cls.return_value.check_status.return_value = {"cookies": {}}
+	_ctx_mock(mock_client_cls)
+	mock_client_cls.return_value.friend_list.side_effect = NotImplementedError("friend_list is not supported")
+	runner = CliRunner()
+	result = runner.invoke(cli, ["chat"])
+	assert result.exit_code == 1
+	parsed = json.loads(result.output)
+	assert parsed["error"]["code"] == "NOT_SUPPORTED"
+	assert parsed["error"]["message"] == "friend_list is not supported"
+	assert parsed["error"]["recoverable"] is True
+	assert parsed["error"]["recovery_action"] == "切换平台或调整命令参数后重试"
 
 
 @patch("boss_agent_cli.commands.chat.get_platform_instance")

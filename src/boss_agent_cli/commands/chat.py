@@ -12,7 +12,9 @@ from boss_agent_cli.commands.chat_utils import (
 	RELATION_LABELS, FROM_FILTER, MSG_STATUS_LABELS,
 	sanitize_csv_cell, escape_md_cell,
 )
-from boss_agent_cli.display import handle_auth_errors, handle_error_output, handle_output, login_action_for_ctx, render_simple_list
+from boss_agent_cli.display import error_contract_for_code, handle_auth_errors, handle_error_output, handle_output, login_action_for_ctx, render_simple_list
+
+NOT_SUPPORTED_RECOVERY_ACTION = "切换平台或调整命令参数后重试"
 
 # 向后兼容别名（旧测试引用 chat._sanitize_csv_cell 等）
 _RELATION_LABELS = RELATION_LABELS
@@ -53,14 +55,26 @@ def chat_cmd(ctx: click.Context, page: int, from_who: str | None, days: int | No
 		return
 
 	with get_platform_instance(ctx, auth) as platform:
-		resp = platform.friend_list(page=page)
+		try:
+			resp = platform.friend_list(page=page)
+		except NotImplementedError as exc:
+			handle_error_output(
+				ctx, "chat",
+				code="NOT_SUPPORTED",
+				message=str(exc) or "当前平台不支持沟通列表能力",
+				recoverable=True,
+				recovery_action=NOT_SUPPORTED_RECOVERY_ACTION,
+			)
+			return
 		if not platform.is_success(resp):
 			code, message = platform.parse_error(resp)
+			recoverable, recovery_action = error_contract_for_code(code)
 			handle_error_output(
 				ctx, "chat",
 				code=code,
 				message=message or "沟通列表获取失败",
-				recoverable=False,
+				recoverable=recoverable,
+				recovery_action=recovery_action,
 			)
 			return
 		platform_data = platform.unwrap_data(resp) or {}
