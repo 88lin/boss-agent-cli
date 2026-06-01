@@ -34,13 +34,6 @@
 
 </div>
 
-> [!TIP]
-> <img src="https://github.com/peterfei/ai-agent-team/raw/main/examples/doloffer.png" alt="Doloffer logo" width="220">
->
-> **Doloffer Guide** 致力于让优质 AI 工具的获取更简单。平台主打 GPT 与 Claude 等主流 AI 服务的正版会员充值，提供一站式订阅管理，主打安全稳定与无忧售后。
->
-> 💡 **极速订阅**： [专属链接](https://doloffer.com/friend/BEv3yvKS)（输入优惠码 `AI8888` 享 9 折特惠）
-
 > A local-assist CLI for AI Agents working around [BOSS Zhipin](https://www.zhipin.com/) data already available to the user. Default low-risk mode is read-only first, user-triggered, and does not automate outreach, bulk actions, risk-control bypasses, or candidate personal-data workflows. See [README.en.md](README.en.md) for the English version.
 
 ## ⚠️ 合规边界
