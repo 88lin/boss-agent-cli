@@ -175,8 +175,10 @@ def test_export_html_to_file(mock_auth_cls, mock_client_cls, tmp_path: Path):
 	assert "<!DOCTYPE html>" in content
 	assert "Full-Stack" in content
 	assert "TestCo" in content
+	assert "20K" not in content
+	assert "薪资" not in content
 	assert "李" not in content
-	assert "[REDACTED]" in content
+	assert "招聘者" not in content
 	# 技能和福利应各自带标签样式
 	assert 'class="tag sk"' in content
 	assert 'class="tag wf"' in content
@@ -184,6 +186,61 @@ def test_export_html_to_file(mock_auth_cls, mock_client_cls, tmp_path: Path):
 	assert "双休" in content
 	# 共 1 条应显示
 	assert "共 1 条" in content
+
+
+@patch("boss_agent_cli.commands.export.get_platform_instance")
+@patch("boss_agent_cli.commands.export.AuthManager")
+def test_export_html_include_private_still_omits_private_fields(mock_auth_cls, mock_client_cls, tmp_path: Path):
+	"""HTML 文件是可分享报表，即使显式 include_private 也不写路由/招聘者私有字段。"""
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.return_value = _api_response([
+		_make_raw_job("Full-Stack", skills=["Python", "React"], welfare=["双休", "五险"], security_id="sec_private"),
+	])
+
+	out_path = tmp_path / "jobs-private.html"
+	runner = CliRunner()
+	result = runner.invoke(
+		cli,
+		["export", "fullstack", "--count", "1", "--format", "html", "--include-private", "-o", str(out_path)],
+	)
+
+	assert result.exit_code == 0
+	parsed = json.loads(result.output)
+	assert parsed["data"]["private_fields"] == "omitted"
+	content = out_path.read_text(encoding="utf-8")
+	assert "Full-Stack" in content
+	assert "TestCo" in content
+	assert "20K" not in content
+	assert "薪资" not in content
+	assert "李" not in content
+	assert "sec_private" not in content
+	assert "j_sec_private" not in content
+	assert "招聘者" not in content
+
+
+@patch("boss_agent_cli.commands.export.JobItem.from_api")
+@patch("boss_agent_cli.commands.export.get_platform_instance")
+@patch("boss_agent_cli.commands.export.AuthManager")
+def test_export_html_to_file_uses_public_api_projection(mock_auth_cls, mock_client_cls, mock_from_api, tmp_path: Path):
+	"""HTML 文件导出不经过包含薪资和路由字段的 JobItem.to_dict 路径。"""
+	mock_client = _ctx_mock(mock_client_cls)
+	mock_client.search_jobs.return_value = _api_response([
+		_make_raw_job("Full-Stack", skills=["Python"], welfare=["双休"], security_id="sec_private"),
+	])
+	mock_from_api.side_effect = AssertionError("HTML export should not build full JobItem")
+
+	out_path = tmp_path / "jobs-public.html"
+	runner = CliRunner()
+	result = runner.invoke(cli, ["export", "fullstack", "--count", "1", "--format", "html", "-o", str(out_path)])
+
+	assert result.exit_code == 0
+	content = out_path.read_text(encoding="utf-8")
+	assert "Full-Stack" in content
+	assert "TestCo" in content
+	assert "20K" not in content
+	assert "sec_private" not in content
+	assert "j_sec_private" not in content
+	assert mock_from_api.call_count == 0
 
 
 @patch("boss_agent_cli.commands.export.get_platform_instance")
