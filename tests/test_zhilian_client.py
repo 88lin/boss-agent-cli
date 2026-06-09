@@ -74,6 +74,46 @@ class TestZhilianClientContextManager:
 			assert not client._closed
 		assert client._closed
 
+	def test_close_releases_httpx_client_and_unregisters(self) -> None:
+		from boss_agent_cli.api.zhilian_client import _OPEN_CLIENTS
+
+		client = ZhilianClient(_StubAuth())
+		fake_http = MagicMock()
+		client._client = fake_http
+
+		assert client in _OPEN_CLIENTS
+		client.close()
+
+		fake_http.close.assert_called_once()
+		assert client._client is None
+		assert client._closed is True
+		assert client not in _OPEN_CLIENTS
+
+	def test_atexit_safeguard_closes_open_clients(self) -> None:
+		from boss_agent_cli.api.zhilian_client import _OPEN_CLIENTS, _close_open_clients
+
+		client1 = ZhilianClient(_StubAuth())
+		client2 = ZhilianClient(_StubAuth())
+		assert client1 in _OPEN_CLIENTS
+		assert client2 in _OPEN_CLIENTS
+
+		_close_open_clients()
+
+		assert client1._closed is True
+		assert client2._closed is True
+
+	def test_atexit_safeguard_ignores_close_errors(self) -> None:
+		from boss_agent_cli.api.zhilian_client import _close_open_clients
+
+		broken = ZhilianClient(_StubAuth())
+		good = ZhilianClient(_StubAuth())
+		broken.close = MagicMock(side_effect=RuntimeError("boom"))
+
+		_close_open_clients()
+
+		broken.close.assert_called_once()
+		assert good._closed is True
+
 
 class TestZhilianClientReadonlyMethods:
 	"""P0 只读能力参数构造正确。"""
@@ -114,6 +154,26 @@ class TestZhilianClientReadonlyMethods:
 		assert params["industry"] == "互联网"
 		assert params["financingStage"] == "A轮"
 		assert params["jobType"] == "全职"
+
+	def test_search_jobs_accepts_boss_compatible_aliases(self) -> None:
+		self.client.search_jobs(
+			"Python",
+			raw_params={"cityId": "530", "extra": "keep"},
+			city="北京",
+			city_code="538",
+			experience="3-5年",
+			experience_code="104",
+			degree="本科",
+			degree_code="203",
+			job_type="全职",
+			job_type_code="1901",
+		)
+		params = self.client._request.call_args.kwargs["params"]
+		assert params["cityId"] == "538"
+		assert params["extra"] == "keep"
+		assert params["workExp"] == "104"
+		assert params["education"] == "203"
+		assert params["jobType"] == "1901"
 
 	def test_job_detail_uses_path_param_url(self) -> None:
 		self.client.job_detail("job-1")

@@ -1,7 +1,10 @@
 """Tests for display.py — TTY detection, renderers, auth error decorator."""
 
+import io
 import sys
 from unittest.mock import patch, MagicMock
+
+from rich.console import Console
 
 from boss_agent_cli.display import (
 	boss_command_for_ctx,
@@ -11,6 +14,13 @@ from boss_agent_cli.display import (
 	handle_auth_errors,
 	login_action_for_ctx,
 )
+
+
+def _capture_display_console(monkeypatch):
+	stream = io.StringIO()
+	console = Console(file=stream, force_terminal=False, width=100)
+	monkeypatch.setattr("boss_agent_cli.display.console", console)
+	return stream
 
 
 class TestIsJsonMode:
@@ -176,6 +186,12 @@ class TestLoginActionForCtx:
 		ctx.obj = {"platform": "zhilian"}
 		assert login_action_for_ctx(ctx) == "boss --platform zhilian login"
 
+	def test_non_default_platform_uses_platform_specific_boss_command(self):
+		ctx = MagicMock()
+		ctx.obj = {"platform": "qiancheng"}
+		assert boss_command_for_ctx(ctx, "status") == "boss --platform qiancheng status"
+		assert login_action_for_ctx(ctx) == "boss --platform qiancheng login"
+
 
 # ── handle_error_output TTY 分支 ─────────────────────────────
 
@@ -244,9 +260,13 @@ class TestHandleAuthErrorsAccountRisk:
 
 
 class TestRenderers:
-	def test_render_job_table_empty(self):
+	def test_render_job_table_empty(self, monkeypatch):
 		from boss_agent_cli.display import render_job_table
+		stream = _capture_display_console(monkeypatch)
+
 		render_job_table([], title="jobs")
+
+		assert "no results" in stream.getvalue()
 
 	def test_render_job_table_with_items(self):
 		from boss_agent_cli.display import render_job_table
@@ -283,9 +303,15 @@ class TestRenderers:
 		from boss_agent_cli.display import render_status
 		render_status({"logged_in": False})
 
-	def test_render_status_not_logged_in_with_custom_login_action(self):
+	def test_render_status_not_logged_in_with_custom_login_action(self, monkeypatch):
 		from boss_agent_cli.display import render_status
+		stream = _capture_display_console(monkeypatch)
+
 		render_status({"logged_in": False}, login_action="boss --platform zhilian login")
+
+		output = stream.getvalue()
+		assert "not logged in" in output
+		assert "boss --platform zhilian login" in output
 
 	def test_render_simple_list_empty(self):
 		from boss_agent_cli.display import render_simple_list
@@ -314,14 +340,21 @@ class TestRenderers:
 		from boss_agent_cli.display import render_batch_operation_summary
 		render_batch_operation_summary({"dry_run": True, "candidates": []})
 
-	def test_render_batch_operation_summary_success(self):
+	def test_render_batch_operation_summary_success(self, monkeypatch):
 		from boss_agent_cli.display import render_batch_operation_summary
+		stream = _capture_display_console(monkeypatch)
+
 		render_batch_operation_summary({
 			"dry_run": False,
 			"greeted": [{"title": "Go", "company": "X"}],
 			"failed": [{"title": "Python", "company": "Y"}],
 			"stopped_reason": "rate limited",
 		})
+
+		output = stream.getvalue()
+		assert "success: 1" in output
+		assert "failed: 1" in output
+		assert "rate limited" in output
 
 	def test_render_sectioned_record_mixed(self):
 		from boss_agent_cli.display import render_sectioned_record
@@ -339,9 +372,16 @@ class TestRenderers:
 		from boss_agent_cli.display import render_string_grid
 		render_string_grid(["北京", "上海", "广州", "深圳", "杭州"], title="cities", columns=4)
 
-	def test_render_export_summary_with_path(self):
+	def test_render_export_summary_with_path(self, monkeypatch):
 		from boss_agent_cli.display import render_export_summary
+		stream = _capture_display_console(monkeypatch)
+
 		render_export_summary({"path": "/tmp/x.csv", "count": 20, "format": "csv"})
+
+		output = stream.getvalue()
+		assert "exported 20 jobs" in output
+		assert "/tmp/x.csv" in output
+		assert "csv" in output
 
 	def test_render_export_summary_without_path(self):
 		from boss_agent_cli.display import render_export_summary

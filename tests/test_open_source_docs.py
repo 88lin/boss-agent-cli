@@ -58,6 +58,10 @@ def test_platform_risk_docs_exist_and_cover_sensitive_boundaries():
 		assert "research/platforms/README.md" in content
 		assert "response interception" in content
 		assert "risk" in content.lower() or "风险" in content
+		assert "Windows app" in content or "Windows 客户端" in content
+		assert "RPA" in content
+		assert "CloakBrowser" in content
+		assert "manual" in content.lower() or "手动" in content
 
 
 def test_security_and_readme_link_platform_risk_docs():
@@ -103,6 +107,7 @@ def test_platform_research_template_covers_adapter_admission_gate():
 	for token in (
 		"zhipin.md",
 		"zhaopin.md",
+		"51job.md",
 		"lagou.md",
 		"liepin.md",
 		"xunjin58/zp_api",
@@ -124,6 +129,7 @@ def test_platform_research_docs_include_unified_adapter_evaluation():
 	for path in (
 		"docs/research/platforms/zhipin.md",
 		"docs/research/platforms/zhaopin.md",
+		"docs/research/platforms/51job.md",
 		"docs/research/platforms/lagou.md",
 		"docs/research/platforms/liepin.md",
 	):
@@ -135,6 +141,37 @@ def test_platform_research_docs_include_unified_adapter_evaluation():
 		assert "response interception" in content, path
 		assert "cookie" in content.lower(), path
 		assert "token" in content.lower(), path
+
+
+def test_51job_research_keeps_issue_230_blocked_until_read_only_gate():
+	content = read("docs/research/platforms/51job.md")
+	index = read("docs/research/platforms/README.md")
+	roadmap = read("ROADMAP.md")
+	roadmap_en = read("ROADMAP.en.md")
+
+	for token in (
+		"#230",
+		"research backlog",
+		"candidate-side",
+		"只读",
+		"禁止",
+		"NOT_SUPPORTED",
+		"PLATFORM_RISK",
+		"Adapter admission gate",
+		"stealth",
+		"response interception",
+		"cookie",
+		"token",
+	):
+		assert token in content, token
+
+	for forbidden_scope in ("自动投递", "批量抓取", "验证码", "CloakBrowser"):
+		assert forbidden_scope in content
+
+	assert "51job.md" in index
+	assert "research backlog" in index
+	assert "docs/research/platforms/51job.md" in roadmap
+	assert "docs/research/platforms/51job.md" in roadmap_en
 
 
 def test_maintainer_docs_cover_open_source_governance():
