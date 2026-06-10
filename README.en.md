@@ -125,6 +125,10 @@ boss login
 # 3. Verify login
 boss status
 
+# Optional: inspect local platform capability status (no network)
+boss platforms
+boss platforms --platform qiancheng  # Inspect one platform; 51job alias is supported
+
 # 4. Search Golang jobs in Guangzhou with 双休 + 五险一金
 boss search "Golang" --city 广州 --welfare "双休,五险一金"
 
@@ -157,6 +161,15 @@ boss-agent-cli covers both the job-seeker and the recruiter side, with a pluggab
 | BOSS Zhipin (`zhipin`) | ✅ | ✅ | default |
 | Zhaopin (`zhilian`)    | 🟡 candidate-side login + read/write flow wired | — | recruiter side is still intentionally unavailable at runtime |
 | 51job (`qiancheng`)     | 🚧 registered placeholder | — | returns `NOT_SUPPORTED` until the read-only research gate is satisfied |
+
+`boss platforms` includes `capability_status_legend` in both JSON and terminal output so agents can interpret capability states clearly:
+
+| State | Meaning |
+|-------|---------|
+| `available` | The local CLI has wired this capability; login requirements still follow the concrete command contract |
+| `not_supported` | The current platform adapter does not implement this real workflow; the CLI returns a stable `NOT_SUPPORTED` envelope |
+| `placeholder_only` | Registered only for platform identity, aliases, schema/config visibility; it does not mean a real platform capability is wired |
+| `low_risk_blocked` | Write actions, sensitive data, or platform-risk boundaries are involved; default low-risk mode blocks the action and points users back to the official UI |
 
 ```bash
 # pick a platform

@@ -1,0 +1,153 @@
+from __future__ import annotations
+
+from typing import Any
+
+import click
+
+from boss_agent_cli.display import handle_output
+from boss_agent_cli.platforms import get_platform, list_platforms, list_recruiter_platforms
+
+_READONLY_CAPABILITIES = ["search", "detail", "recommend", "me", "status"]
+_WRITE_CAPABILITIES = ["greet", "apply"]
+_LOCAL_CAPABILITIES = ["shortlist", "stats", "config", "schema"]
+
+_PLATFORM_CAPABILITY_STATUS: dict[str, dict[str, str]] = {
+	"zhipin": {
+		"search": "available",
+		"detail": "available",
+		"recommend": "available",
+		"me": "available",
+		"status": "available",
+		"greet": "low_risk_blocked",
+		"apply": "low_risk_blocked",
+	},
+	"zhilian": {
+		"search": "available",
+		"detail": "available",
+		"recommend": "available",
+		"me": "available",
+		"status": "available",
+		"greet": "low_risk_blocked",
+		"apply": "low_risk_blocked",
+	},
+	"qiancheng": {
+		"search": "not_supported",
+		"detail": "not_supported",
+		"recommend": "not_supported",
+		"me": "not_supported",
+		"status": "placeholder_only",
+		"greet": "not_supported",
+		"apply": "not_supported",
+	},
+}
+
+_CAPABILITY_STATUS_LEGEND: dict[str, dict[str, str]] = {
+	"available": {
+		"label": "可用",
+		"description": "本地 CLI 已接入该能力；是否需要登录仍以具体命令契约为准。",
+	},
+	"not_supported": {
+		"label": "不支持",
+		"description": "当前平台适配器没有实现该真实工作流；CLI 会稳定返回 NOT_SUPPORTED。",
+	},
+	"placeholder_only": {
+		"label": "仅占位",
+		"description": "仅用于平台注册、别名、schema/config 可见性；不代表真实平台能力已接入。",
+	},
+	"low_risk_blocked": {
+		"label": "低风险模式阻断",
+		"description": "涉及写操作、敏感数据或平台风险边界；默认低风险模式阻断并提示回到官方页面手动处理。",
+	},
+}
+
+
+_PLATFORM_NOTES = {
+	"zhipin": "默认平台；候选者侧与招聘者侧注册表均已接入。",
+	"zhilian": "候选者侧只读链路已接入；招聘者侧暂不可用。",
+	"qiancheng": "51job/前程无忧当前仅注册平台身份；真实能力返回 NOT_SUPPORTED。",
+}
+
+_ALIAS_NAMES = {
+	"51job",
+}
+
+
+def _resolve_platform_filter(platform_name: str | None) -> str | None:
+	if platform_name is None:
+		return None
+	aliases = {"51job": "qiancheng"}
+	resolved = aliases.get(platform_name, platform_name)
+	candidate_platforms = [name for name in list_platforms() if name not in _ALIAS_NAMES]
+	if resolved not in candidate_platforms:
+		supported = ", ".join([*candidate_platforms, *sorted(aliases)])
+		raise click.BadParameter(
+			f"unknown platform {platform_name!r}, supported: {supported}",
+			param_hint="--platform",
+		)
+	return resolved
+
+
+def platform_capability_data(platform_name: str | None = None) -> dict[str, Any]:
+	"""Return local-only platform capability metadata without creating clients."""
+	resolved_platform = _resolve_platform_filter(platform_name)
+	candidate_platforms = [name for name in list_platforms() if name not in _ALIAS_NAMES]
+	if resolved_platform is not None:
+		candidate_platforms = [resolved_platform]
+	recruiter_platforms = list_recruiter_platforms()
+	platforms = []
+	for name in candidate_platforms:
+		platform_cls = get_platform(name)
+		statuses = _PLATFORM_CAPABILITY_STATUS[name]
+		platforms.append({
+			"name": name,
+			"display_name": platform_cls.display_name,
+			"base_url": platform_cls.base_url,
+			"candidate": True,
+			"recruiter": f"{name}-recruiter" in recruiter_platforms,
+			"status": "placeholder" if name == "qiancheng" else "available",
+			"capabilities": {
+				"readonly": {capability: statuses[capability] for capability in _READONLY_CAPABILITIES},
+				"write": {capability: statuses[capability] for capability in _WRITE_CAPABILITIES},
+				"local": {capability: "available" for capability in _LOCAL_CAPABILITIES},
+			},
+			"notes": _PLATFORM_NOTES[name],
+		})
+	return {
+		"count": len(platforms),
+		"default": "zhipin",
+		"aliases": {"51job": "qiancheng"},
+		"capability_status_legend": _CAPABILITY_STATUS_LEGEND,
+		"platforms": platforms,
+	}
+
+
+def _render_platforms(data: dict[str, Any]) -> None:
+	lines = ["name\tdisplay_name\tstatus\tcandidate\trecruiter"]
+	for item in data["platforms"]:
+		candidate = "yes" if item["candidate"] else "no"
+		recruiter = "yes" if item["recruiter"] else "no"
+		lines.append(f"{item['name']}\t{item['display_name']}\t{item['status']}\t{candidate}\t{recruiter}")
+	lines.append("")
+	lines.append("capability_status_legend")
+	for status, meta in data["capability_status_legend"].items():
+		lines.append(f"{status}\t{meta['label']}\t{meta['description']}")
+	click.echo("\n".join(lines))
+
+
+@click.command("platforms")
+@click.option("--platform", "platform_name", default=None, help="仅查看指定平台（支持 qiancheng / 51job 等已注册平台或别名）")
+@click.pass_context
+def platforms_cmd(ctx: click.Context, platform_name: str | None) -> None:
+	"""列出本地已注册平台与能力状态。"""
+	handle_output(
+		ctx,
+		"platforms",
+		platform_capability_data(platform_name),
+		render=_render_platforms,
+		hints={
+			"next_actions": [
+				"boss --platform <name> status — 检查指定平台本地登录态",
+				"boss schema — 查看命令级可用性矩阵",
+			],
+		},
+	)

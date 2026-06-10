@@ -48,6 +48,7 @@ class TestQianchengNotSupportedEnvelope:
 		self.plat = QianchengPlatform(self.client)
 
 	def test_candidate_capabilities_return_not_supported(self) -> None:
+		capabilities = set()
 		for raw in (
 			self.plat.search_jobs("Python", city="广州"),
 			self.plat.job_detail("job-id"),
@@ -70,11 +71,31 @@ class TestQianchengNotSupportedEnvelope:
 			assert raw["error"]["code"] == "NOT_SUPPORTED"
 			assert raw["error"]["recoverable"] is True
 			assert raw["error"]["details"]["platform"] == "qiancheng"
+			capabilities.add(raw["error"]["details"]["capability"])
 			assert self.plat.is_success(raw) is False
 			code, message = self.plat.parse_error(raw)
 			assert code == "NOT_SUPPORTED"
 			assert "research backlog" in message
+			assert raw["error"]["details"]["capability"] in message
 			assert self.plat.unwrap_data(raw) is None
+		assert capabilities == {
+			"search_jobs",
+			"job_detail",
+			"recommend_jobs",
+			"user_info",
+			"resume_baseinfo",
+			"resume_expect",
+			"deliver_list",
+			"job_card",
+			"interview_data",
+			"chat_history",
+			"friend_label",
+			"exchange_contact",
+			"job_history",
+			"greet",
+			"apply",
+			"friend_list",
+		}
 
 	def test_stub_does_not_delegate_to_client(self) -> None:
 		self.plat.search_jobs("Python")
@@ -111,11 +132,26 @@ class TestQianchengCliVisibility:
 		result = runner.invoke(cli, ["--data-dir", str(tmp_path), "--platform", "qiancheng", "schema"])
 		assert result.exit_code == 0
 
-	def test_detail_returns_qiancheng_not_supported_envelope(self, tmp_path) -> None:
+	def test_qiancheng_cli_commands_return_expected_error_envelopes(self, tmp_path) -> None:
 		runner = CliRunner()
-		result = runner.invoke(cli, ["--data-dir", str(tmp_path), "--platform", "qiancheng", "detail", "fake-id"])
-		assert result.exit_code == 1
-		payload = json.loads(result.output)
-		assert payload["error"]["code"] == "NOT_SUPPORTED"
-		assert "51job/前程无忧适配器" in payload["error"]["message"]
-		assert "job_card" in payload["error"]["message"]
+		platform_cases = [
+			(["search", "python"], "search", "search_jobs"),
+			(["me"], "me", "user_info"),
+			(["history"], "history", "job_history"),
+			(["detail", "fake-id"], "detail", "job_card"),
+		]
+
+		for args, command, capability in platform_cases:
+			result = runner.invoke(cli, ["--data-dir", str(tmp_path), "--platform", "qiancheng", *args])
+			assert result.exit_code == 1, result.output
+			payload = json.loads(result.output)
+			assert payload["ok"] is False
+			assert payload["command"] == command
+			assert payload["data"] is None
+			assert payload["error"]["code"] == "NOT_SUPPORTED"
+			assert payload["error"]["details"] == {
+				"platform": "qiancheng",
+				"capability": capability,
+			}
+			assert "51job/前程无忧适配器" in payload["error"]["message"]
+			assert capability in payload["error"]["message"]

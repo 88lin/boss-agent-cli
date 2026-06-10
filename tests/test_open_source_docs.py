@@ -223,6 +223,8 @@ def test_pull_request_template_requires_quality_and_risk_checks():
 	assert "JSON 信封" in template
 	assert "Token / 密码 / Cookie / security_id" in template
 	assert "commit message 格式: `type: 中文描述`" in template
+	assert "Co-authored-by" in template
+	assert "AI 署名" in template
 	assert "（或英文等价）" not in template
 
 
@@ -342,7 +344,11 @@ def test_docs_workflow_runs_open_source_doc_checks():
 	triggers = workflow["on"]
 	assert {"push", "pull_request", "workflow_dispatch"} <= set(triggers)
 	assert triggers["push"]["branches"] == ["master"]
-	assert set(expected_paths) <= set(triggers["push"]["paths"])
+	assert "paths" not in triggers["push"]
+	assert "push" in raw_workflow
+	assert "paths:" not in raw_workflow.split("pull_request:", 1)[0]
+	for path in expected_paths:
+		assert path not in raw_workflow.split("pull_request:", 1)[0]
 	assert triggers["pull_request"]["branches"] == ["master"]
 	assert "paths" not in triggers["pull_request"]
 
