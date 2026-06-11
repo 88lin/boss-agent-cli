@@ -22,7 +22,6 @@ def _doc_paths_for_compliance_guardrails() -> list[str]:
 	return _existing([
 		"README.md",
 		"README.en.md",
-		"SKILL.md",
 		"AGENTS.md",
 		"CLAUDE.md",
 		"docs/agent-quickstart.md",
@@ -92,7 +91,7 @@ def test_capability_matrix_exists_and_covers_core_capabilities():
 	assert "`boss digest`" in content
 	assert "`boss config`" in content
 	assert "`boss clean`" in content
-	assert "34 个顶层命令" in content
+	assert "35 个顶层命令" in content
 	assert "9 个一级招聘者子命令" in content
 	assert "`qiancheng` / 51job" in content
 	assert "`NOT_SUPPORTED`" in content
@@ -125,14 +124,11 @@ def test_51job_research_readiness_contract_is_documented():
 	assert "写操作、批量抓取、自动投递仍处于禁止或受限状态" in content
 
 
-def test_readme_and_skill_link_to_new_docs():
+def test_readme_links_to_new_docs():
+	"""根 SKILL.md 已迁至独立仓库 boss-skill，README 是本仓库的文档导航入口。"""
 	readme = _read("README.md")
 	assert "[Agent Quickstart](docs/agent-quickstart.md)" in readme
 	assert "[Capability Matrix](docs/capability-matrix.md)" in readme
-
-	skill = _read("SKILL.md")
-	assert "[Agent Quickstart](docs/agent-quickstart.md)" in skill
-	assert "[Capability Matrix](docs/capability-matrix.md)" in skill
 
 
 def test_mcp_readme_links_to_quickstart_and_matrix():
@@ -195,7 +191,7 @@ def test_english_agent_docs_exist_and_are_linked_from_english_entrypoints():
 	assert "| Capability | CLI command | Login required | Transport |" in matrix
 	assert "`boss schema`" in matrix
 	assert "`boss hr candidates`" in matrix
-	assert "34 top-level commands" in matrix
+	assert "35 top-level commands" in matrix
 	assert "9 first-level recruiter subcommands" in matrix
 
 	mcp_readme = _read("mcp-server/README.en.md")
