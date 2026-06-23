@@ -1,6 +1,6 @@
 # 推荐 AI 模型与入口
 
-`boss ai` 命令组基于 OpenAI 兼容协议。下表汇总主流模型的推荐入口和配置示例，供你挑选最新或最合适的模型接入。更新时间：2026-04-20。
+`boss ai` 命令组基于 OpenAI 兼容协议。下表汇总主流模型的推荐入口和配置示例，供你挑选最新或最合适的模型接入。更新时间：2026-06-24。
 
 ## 支持的 Provider
 
@@ -13,6 +13,7 @@
 | `qwen` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 通义千问 Qwen3 系列 |
 | `zhipu` | `https://open.bigmodel.cn/api/paas/v4` | 智谱 GLM-4.6 / GLM-Z1 |
 | `siliconflow` | `https://api.siliconflow.cn/v1` | 硅基流动聚合推理 |
+| `atlas` | `https://api.atlascloud.ai/v1` | **全模态聚合入口**，一个 OpenAI 兼容 API 覆盖 DeepSeek、Qwen、GLM、Kimi、MiniMax、Claude、GPT 等 |
 | `custom` | 需手动指定 `--base-url` | 自建代理、LiteLLM、OneAPI 等 |
 
 ## Claude 4.7 / GPT-5 配置示例
@@ -66,6 +67,19 @@ boss ai config \
   --api-key <ZHIPU_KEY>
 ```
 
+### Atlas Cloud（OpenAI 兼容聚合入口）
+
+Atlas Cloud 提供 OpenAI 兼容 API。使用 `--provider atlas` 时，`boss ai` 会默认解析到 `https://api.atlascloud.ai/v1`，模型名以服务端实际支持为准：
+
+```bash
+boss ai config \
+  --provider atlas \
+  --model deepseek-ai/deepseek-v4-pro \
+  --api-key <ATLASCLOUD_KEY>
+```
+
+> `deepseek-ai/deepseek-v4-pro` 是带思维链的推理模型，`max_tokens` 要给足（建议 ≥ 512），否则 token 可能先耗在思维链上，出现 `content` 为空且 `finish_reason=length`。`boss ai config` 的 `--max-tokens` 默认即为 4096，无需额外调整。
+
 ### 自建代理（LiteLLM / OneAPI）
 
 ```bash
@@ -83,7 +97,8 @@ boss ai config \
 | 想用最强推理模型 | `openrouter` + `anthropic/claude-opus-4.7` 或 `openai` + `gpt-5` |
 | 对成本敏感 | `deepseek` + `deepseek-chat`（性价比极高） |
 | 国内直连不走代理 | `qwen` / `zhipu` / `deepseek` / `moonshot` |
-| 需要混用多家模型 | `openrouter` 一个 key 全覆盖 |
+| 需要混用多家模型 | `openrouter` 或 `atlas` 一个 key 全覆盖 |
+| 想要全模态 + OpenAI 兼容聚合入口 | `atlas` + `deepseek-ai/deepseek-v4-pro` |
 | 已有自建代理 | `custom` + `--base-url` |
 
 ## 配置校验
