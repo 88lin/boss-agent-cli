@@ -862,7 +862,7 @@ SCHEMA_DATA = {
 			},
 		},
 		"ai": {
-			"description": "AI 简历优化、聊天回复与本地模型管理（子命令：config/local/analyze-jd/polish/optimize/suggest/fit/reply/interview-prep/chat-coach）",
+			"description": "AI 简历优化、聊天回复与本地模型管理（子命令：config/local/analyze-jd/polish/optimize/suggest/fit/reply/interview-prep/chat-coach/suggest-keywords/resume-optimize）",
 			"args": [],
 			"options": {},
 			"subcommands": {
@@ -876,6 +876,8 @@ SCHEMA_DATA = {
 				"reply": "基于招聘者消息生成回复草稿（2-3 条候选）",
 				"interview-prep": "基于目标职位生成模拟面试题与准备建议",
 				"chat-coach": "基于聊天记录诊断沟通状态并给出下一步建议",
+				"suggest-keywords": "基于候选池分析推荐搜索关键词组合",
+				"resume-optimize": "基于目标岗位优化简历措辞（仅建议，不修改简历）",
 			},
 		},
 		"agent": {
@@ -1101,6 +1103,11 @@ SCHEMA_DATA = {
 			"message": "AI 返回结果解析失败",
 			"recoverable": True,
 			"recovery_action": "重试（模型输出不稳定时可能发生）",
+		},
+		"CACHE_MISS": {
+			"message": "缓存数据缺失",
+			"recoverable": True,
+			"recovery_action": "执行对应的数据获取命令以填充缓存",
 		},
 		"RECRUITER_NOT_AUTHORIZED": {
 			"message": "当前账号非招聘者账号",
