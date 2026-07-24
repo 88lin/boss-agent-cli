@@ -58,6 +58,7 @@
 | 增量监控 | `boss watch run` | 是 | 受限（默认阻断）；add/list/remove 为本地 |
 | 搜索预设 | `boss preset` | 否 | 本地 |
 | 候选池 | `boss shortlist` | 否 | 本地 |
+| 候选池 | `boss favorites` | 否 | 平台只读 + 本地 |
 
 ## 用户信息
 
@@ -111,4 +112,4 @@
 - 当前多平台状态：`boss platforms` 返回本地平台注册与能力状态，也可通过 `boss platforms --platform qiancheng` / `--platform 51job` 只查看单个平台或别名；`zhipin` 已覆盖求职者与招聘者实现，但敏感链路默认受低风险模式阻断；`zhilian` 已接通候选者侧链路，招聘者侧自动化通过 `agent` browser/CDP adapter V1 接入；`qiancheng` / 51job 仅为已注册占位适配器，真实工作流统一返回 `NOT_SUPPORTED`。
 - 当前登录状态：`zhipin` / `zhilian` 保留用户主动登录兼容链路；风控研究仅在显式 Research Mode 和声明的 adapter 中进行，且不得用于规避平台风控。
 - `crawl` 是用户显式触发的顺序 Research Mode 任务，使用独立 Chrome profile、跨进程速率预算、SQLite 断点和 `crawl stop` kill switch；MCP 保持 assisted-only，仅提供已有 run 的 `crawl_status/results/shortlist` 本地操作。默认 Hook 为 `none`；用户只有在拥有脚本授权时才能提供本地原始文件和 `SHA256SUMS` 以选择 Hook。候选人 `agent crawl` 默认只能消费已完成 run，只有设置 `operating_mode=research` 且传入 `--allow-crawl` 才可新建采集；风险码、安全页或预算耗尽会停止并返回恢复命令。
-- 以 `boss schema` 为准：当前暴露 37 个顶层命令；其中 `hr` 下还有 9 个一级招聘者子命令，`ai` / `resume` 为命令组入口。
+- 以 `boss schema` 为准：当前暴露 38 个顶层命令；其中 `hr` 下还有 9 个一级招聘者子命令，`ai` / `resume` 为命令组入口。

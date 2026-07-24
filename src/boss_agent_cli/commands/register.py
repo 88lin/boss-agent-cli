@@ -19,6 +19,7 @@ from boss_agent_cli.commands import (
 	doctor,
 	exchange,
 	export,
+	favorites,
 	greet,
 	history,
 	interviews,
@@ -79,6 +80,7 @@ def register_candidate_commands(cli: click.Group) -> None:
 	cli.add_command(pipeline.follow_up_cmd, "follow-up")
 	cli.add_command(apply.apply_cmd, "apply")
 	cli.add_command(shortlist.shortlist_group, "shortlist")
+	cli.add_command(favorites.favorites_group, "favorites")
 	cli.add_command(preset.preset_group, "preset")
 	cli.add_command(digest.digest_cmd, "digest")
 	cli.add_command(config_cmd.config_group, "config")

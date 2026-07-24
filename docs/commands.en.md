@@ -12,7 +12,7 @@ boss schema --format anthropic-tools   # export Claude Tool Use definitions
 boss <cmd> --help                      # options for a single command
 ```
 
-`boss schema` currently exposes 37 top-level commands, plus 9 first-level recruiter
+`boss schema` currently exposes 38 top-level commands, plus 9 first-level recruiter
 subcommands under `hr`, grouped below by workflow stage.
 
 Operating mode: `boss config set operating_mode assisted|research`. The default is `assisted`; after switching, run `boss schema` again to inspect per-command mode, risk, and data classifications.
@@ -94,6 +94,7 @@ After every page, `<data-dir>/crawl/runs/<run_id>/jobs.json`, `jobs.csv`, and a 
 | `boss pipeline` / `boss follow-up` / `boss digest` | Restricted: blocked by default (depend on session/interview data) |
 | `boss watch add/list/remove/run` | add/list/remove manage local presets; run is blocked by default (avoids automated incremental pulls) |
 | `boss shortlist add/list/annotate/compare/remove` | Local shortlist with tags, notes, and offline compare |
+| `boss favorites list/sync` | Read BOSS job favorites and sync to local shortlist (deduplicates jobs, refreshes dynamic access IDs, preserves first-saved time) |
 | `boss preset add/list/remove` | Search presets |
 
 ## Recruiter mode

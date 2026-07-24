@@ -89,6 +89,9 @@ class QianchengPlatform(Platform):
 	def deliver_list(self, page: int = 1) -> dict[str, Any]:
 		return self._not_supported("deliver_list")
 
+	def job_favorites(self, page: int = 1, tag: int = 4, is_active: bool = True) -> dict[str, Any]:
+		return self._not_supported("job_favorites")
+
 	def job_card(self, security_id: str, lid: str = "") -> dict[str, Any]:
 		return self._not_supported("job_card")
 

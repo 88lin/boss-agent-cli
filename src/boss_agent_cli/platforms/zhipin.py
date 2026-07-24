@@ -85,6 +85,9 @@ class BossPlatform(Platform):
 	def deliver_list(self, page: int = 1) -> dict[str, Any]:
 		return self._client.deliver_list(page=page)
 
+	def job_favorites(self, page: int = 1, tag: int = 4, is_active: bool = True) -> dict[str, Any]:
+		return self._client.job_favorites(page=page, tag=tag, is_active=is_active)
+
 	def job_card(self, security_id: str, lid: str = "") -> dict[str, Any]:
 		return self._client.job_card(security_id, lid)
 

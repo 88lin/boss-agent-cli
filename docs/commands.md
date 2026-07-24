@@ -17,7 +17,7 @@ boss <命令> --help                      # 查看单个命令选项
 
 | 命令 | 说明 |
 |------|------|
-| `boss schema` | 输出完整工具能力描述 JSON（37 个顶层命令 + hr 分组展开，Agent 首先调用） |
+| `boss schema` | 输出完整工具能力描述 JSON（38 个顶层命令 + hr 分组展开，Agent 首先调用） |
 | `boss platforms` | 本地平台注册与能力状态（不触网；支持 `--platform` 单平台过滤与 `--capability` 反查，附 `capability_status_legend`） |
 | `boss login` | 用户主动登录（按平台走 Cookie / CDP / QR / 浏览器降级链路） |
 | `boss logout` | 退出登录 |
@@ -92,6 +92,7 @@ boss crawl stop <run_id>
 | `boss digest` | 受限：默认低风险模式阻断，依赖会话/面试数据 |
 | `boss watch add/list/remove/run` | add/list/remove 为本地预设；run 默认阻断，避免自动增量拉取平台数据 |
 | `boss shortlist add/list/annotate/compare/remove` | 本地候选池：支持标签、备注和离线对比 |
+| `boss favorites list/sync` | 读取 BOSS 职位收藏并同步到本地候选池（按职位去重、刷新动态访问 ID，保留首次收藏时间） |
 | `boss preset add/list/remove` | 搜索预设 |
 
 ## 招聘者模式

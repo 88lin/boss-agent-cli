@@ -103,6 +103,8 @@ def _tool_availability(tool_name: str) -> dict[str, Any] | None:
 		return commands["preset"].get("availability")
 	if name.startswith("shortlist_"):
 		return commands["shortlist"].get("availability")
+	if name.startswith("favorites_"):
+		return commands["favorites"].get("availability")
 	if name.startswith("crawl_"):
 		return commands["crawl"].get("availability")
 	if name.startswith("hr_"):
@@ -699,6 +701,17 @@ TOOLS = [
 		inputSchema={"type": "object", "properties": {}, "required": []},
 	),
 	Tool(
+		name="boss_favorites_list",
+		description="预览 BOSS 职位收藏单页（不落库）",
+		inputSchema={
+			"type": "object",
+			"properties": {
+				"page": {"type": "int", "description": "页码"},
+			},
+			"required": [],
+		},
+	),
+	Tool(
 		name="boss_shortlist_add",
 		description="将职位加入本地候选池，可附加本地标签和备注",
 		inputSchema={
@@ -1275,6 +1288,12 @@ def _build_args(tool_name: str, arguments: dict) -> list[str]:
 
 	if name == "shortlist_list":
 		return ["shortlist", "list"]
+
+	if name == "favorites_list":
+		args = ["favorites", "list"]
+		if arguments.get("page"):
+			args.extend(["--page", str(arguments["page"])])
+		return args
 
 	if name == "shortlist_add":
 		args = ["shortlist", "add", arguments["security_id"], arguments["job_id"]]

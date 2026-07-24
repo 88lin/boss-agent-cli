@@ -136,6 +136,7 @@ module = [
 	"boss_agent_cli.commands.mark",
 	"boss_agent_cli.commands.clean",
 	"boss_agent_cli.commands.shortlist",
+	"boss_agent_cli.commands.favorites",
 	"boss_agent_cli.commands.chat_snapshot",
 	"boss_agent_cli.commands.preset",
 	"boss_agent_cli.commands.watch",

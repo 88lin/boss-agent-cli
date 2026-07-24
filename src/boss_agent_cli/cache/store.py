@@ -579,6 +579,71 @@ class CacheStore:
 		)
 		self._conn.commit()
 
+	def add_shortlist_batch(self, items: list[dict[str, Any]], source: str = "favorites") -> dict[str, int]:
+		"""批量导入候选池：按 job_id 去重，刷新 favorites 访问 ID，缺主键则跳过。
+
+		securityId 每次请求重新生成（实测 C3：同职位两次请求 sid 全不同），不能作去重键；
+		encryptJobId（job_id）跨请求稳定，故按 job_id 去重。已有 favorites 记录会刷新
+		security_id，但保留用户标签、备注、来源和 created_at；其他来源记录保持不变。
+		`with self._conn:` 上下文保证中途异常自动回滚（deferred 隔离下避免部分批次
+		被下一次 commit 连带提交）。返回 {imported_count, existing_count, skipped_count}。
+		"""
+		imported_count = 0
+		existing_count = 0
+		skipped_count = 0
+		with self._conn:
+			existing_by_job_id: dict[str, tuple[str, str]] = {
+				str(row[1]): (str(row[0]), str(row[2]))
+				for row in self._conn.execute(
+					"SELECT security_id, job_id, source FROM shortlist_records WHERE job_id != '' "
+					"ORDER BY created_at ASC"
+				).fetchall()
+			}
+			for item in items:
+				security_id = str(item.get("security_id") or "")
+				job_id = str(item.get("job_id") or "")
+				if not security_id or not job_id:
+					skipped_count += 1
+					continue
+				if job_id in existing_by_job_id:
+					old_security_id, old_source = existing_by_job_id[job_id]
+					if old_source == source and old_security_id != security_id:
+						self._conn.execute(
+							"UPDATE shortlist_records SET security_id = ? "
+							"WHERE security_id = ? AND job_id = ?",
+							(security_id, old_security_id, job_id),
+						)
+						existing_by_job_id[job_id] = (security_id, old_source)
+					existing_count += 1
+					continue
+				cursor = self._conn.execute(
+					"INSERT OR IGNORE INTO shortlist_records "
+					"(security_id, job_id, title, company, city, salary, source, tags, note, created_at) "
+					"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					(
+						security_id,
+						job_id,
+						str(item.get("title", "") or ""),
+						str(item.get("company", "") or ""),
+						str(item.get("city", "") or ""),
+						str(item.get("salary", "") or ""),
+						item.get("source") or source,
+						self._serialize_shortlist_tags(item.get("tags", [])),
+						str(item.get("note", "") or ""),
+						time.time(),
+					),
+				)
+				if cursor.rowcount == 1:
+					imported_count += 1
+					existing_by_job_id[job_id] = (security_id, str(item.get("source") or source))
+				else:
+					existing_count += 1
+		return {
+			"imported_count": imported_count,
+			"existing_count": existing_count,
+			"skipped_count": skipped_count,
+		}
+
 	def list_shortlist(self) -> list[dict[str, Any]]:
 		rows = self._conn.execute(
 			"SELECT security_id, job_id, title, company, city, salary, source, tags, note, created_at "

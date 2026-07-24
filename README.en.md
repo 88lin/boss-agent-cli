@@ -44,9 +44,9 @@ Assisted Mode is on by default: local assistance, read-only first, and user-trig
 
 - **Job discovery**: keyword search + layered filters, with cached `show` navigation — `search` `show` `detail`
 - **Welfare filtering (the differentiator)**: `--welfare "双休,五险一金"` pages, fetches details, runs **real AND matching**, and can `--sort score` by local match score — `search --welfare`
-- **Local shortlist & stats**: inspect details, organize candidates with local tags and notes, compare jobs offline, and see funnel stats; apply and messaging stay on the official website — `shortlist` `stats` `watch` `preset`
+- **Local shortlist & stats**: inspect details, sync web favorited jobs, organize candidates with local tags and notes, compare jobs offline, and see funnel stats; apply and messaging stay on the official website — `shortlist` `stats` `watch` `preset` `favorites`
 - **AI job-hunting assist + local models**: JD analysis, resume polish, role-targeted optimization, keyword suggestions, resume optimization, shortlist fit reports, interview prep, chat coaching; local weights stay outside the Python package via Ollama/vLLM OpenAI-compatible endpoints — `ai analyze-jd` `ai suggest-keywords` `ai resume-optimize` `ai interview-prep` `ai chat-coach` `ai local configure` `ai local smoke`
-- **Schema-first + JSON envelope**: stdout is a JSON-only `{ok, data, pagination, error, hints}` envelope, `boss schema` is the capability source of truth, and an **MCP server with 49 tools** exposes the low-risk and local task surface
+- **Schema-first + JSON envelope**: stdout is a JSON-only `{ok, data, pagination, error, hints}` envelope, `boss schema` is the capability source of truth, and an **MCP server with 50 tools** exposes the low-risk and local task surface
 - **Recruiter loop**: list and bring postings online / offline (`hr jobs list/online/offline`); candidate personal-data workflows are blocked by default
 - **Cross-platform layer**: live `Platform` / `RecruiterPlatform` registries, `--platform zhipin|zhilian|qiancheng`
 
@@ -93,7 +93,7 @@ boss config set platform zhilian          # set as default
 Start here: [Agent Quickstart](docs/agent-quickstart.en.md) · [Capability Matrix](docs/capability-matrix.en.md) · [Host Examples](docs/agent-hosts.en.md)
 
 ```json
-// Option 1: MCP (recommended) — Claude Desktop / Cursor and other MCP hosts; MCP server with 49 tools
+// Option 1: MCP (recommended) — Claude Desktop / Cursor and other MCP hosts; MCP server with 50 tools
 { "mcpServers": { "boss-agent": { "command": "uvx", "args": ["--from", "boss-agent-cli[mcp]", "boss-mcp"] } } }
 ```
 
@@ -123,11 +123,11 @@ with BossClient(AuthManager(...)) as client:
 
 ## 📚 Commands
 
-`boss schema` exposes 37 top-level commands + 9 first-level recruiter subcommands, grouped by workflow:
+`boss schema` exposes 38 top-level commands + 9 first-level recruiter subcommands, grouped by workflow:
 
 - **Auth**: `login` · `logout` · `status` · `doctor`
 - **Discover**: `search` · `detail` · `show` · `cities` · `history`
-- **Organize**: `watch` · `preset` · `shortlist` · `stats`
+- **Organize**: `watch` · `preset` · `shortlist` · `stats` · `favorites`
 - **Restricted research crawl**: `crawl configure/run/start/status/results/resume/stop/shortlist` (explicit `operating_mode=research` only; MCP only reads or locally imports an existing run)
 - **Resume / AI**: `resume` · `me` · `ai analyze-jd` · `ai polish` · `ai optimize` · `ai fit` · `ai suggest-keywords` · `ai resume-optimize` · `ai cover-letter` · `ai interview-prep` · `ai chat-coach` · `ai local`
 - **Utility**: `schema` · `platforms` · `export` · `config` · `clean`

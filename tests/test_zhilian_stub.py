@@ -175,6 +175,7 @@ class TestZhilianDelegation:
 			("friend_list", ()),
 			("friend_label", ("friend-1", 1)),
 			("exchange_contact", ("sid", "uid", "name")),
+			("job_favorites", ()),
 		]:
 			try:
 				getattr(self.plat, method_name)(*args)

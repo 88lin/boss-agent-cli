@@ -163,6 +163,10 @@ class Platform(ABC):
 		"""获取投递记录。"""
 		raise NotImplementedError(f"{self.name} platform does not implement deliver_list")
 
+	def job_favorites(self, page: int = 1, tag: int = 4, is_active: bool = True) -> dict[str, Any]:
+		"""获取职位收藏列表（用户主动同步到本地 shortlist 用，只读 GET）。"""
+		raise NotImplementedError(f"{self.name} platform does not implement job_favorites")
+
 	# ── 职位卡片（详情降级通道）──
 
 	def job_card(self, security_id: str, lid: str = "") -> dict[str, Any]:

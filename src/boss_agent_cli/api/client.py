@@ -156,6 +156,11 @@ class BossClient(_BaseHttpClient):
 		params = {"page": page}
 		return self._request("GET", endpoints.DELIVER_LIST_URL, params=params)
 
+	def job_favorites(self, page: int = 1, tag: int = 4, is_active: bool = True) -> dict[str, Any]:
+		"""获取职位收藏列表（geekGetJob?tag=4，与 deliver_list 同级 wapi 只读 GET）。"""
+		params = {"page": page, "tag": tag, "isActive": "true" if is_active else "false"}
+		return self._request("GET", endpoints.GEEK_GET_JOB_URL, params=params)
+
 	def friend_list(self, page: int = 1) -> dict[str, Any]:
 		params = {"page": page}
 		return self._request("GET", endpoints.FRIEND_LIST_URL, params=params)

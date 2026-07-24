@@ -49,7 +49,7 @@ Add the server in Cursor Settings -> MCP Servers:
 
 ## Available tools
 
-The current MCP server exposes **49 low-risk and local task tools** by default.
+The current MCP server exposes **50 low-risk and local task tools** by default.
 
 ### Auth and environment
 
