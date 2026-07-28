@@ -127,3 +127,33 @@ jobs:
 
       - name: Run mypy
         run: uv run mypy src/boss_agent_cli
+
+  docker:
+    # 容器镜像必须每次构建，否则会像此前那个无人引用的 Dockerfile 一样静默腐烂。
+    #
+    # 刻意用 runner 自带的 docker build，不上 buildx / GHA 缓存：docker-container
+    # driver 需要额外从 Docker Hub 拉 moby/buildkit，`# syntax=` 前端又要再拉一次
+    # docker/dockerfile——两者都曾在此 job 上因 Docker Hub 超时而假红。构建本身只要
+    # 几十秒，省下的缓存收益远不及这两个外部依赖带来的偶发失败。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build -t boss-agent-cli:ci .
+
+      - name: Verify the CLI entry point and JSON envelope
+        run: |
+          docker run --rm --entrypoint boss boss-agent-cli:ci --version
+          docker run --rm --entrypoint boss boss-agent-cli:ci --json schema --format native \
+            | python3 -c "import sys, json; d = json.load(sys.stdin); assert d['ok'], d; print('schema commands:', len(d['data']['commands']))"
+
+      - name: Verify the MCP server handshake over stdio
+        run: |
+          printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}' \
+            | docker run --rm -i boss-agent-cli:ci \
+            | python3 -c "import sys, json; d = json.loads(sys.stdin.readline()); assert d['result']['serverInfo']['name'] == 'boss-agent-cli', d; print('MCP initialize ok')"
+
+      - name: Verify it runs as non-root
+        run: |
+          test "$(docker run --rm --entrypoint id boss-agent-cli:ci -u)" != "0"
