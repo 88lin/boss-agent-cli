@@ -6,11 +6,14 @@ Endpoints sourced from newboss/boss-cli project (confirmed via reverse engineeri
 
 import atexit
 import json
+from pathlib import Path
 from typing import Any, cast
+from urllib.parse import quote
 
 from boss_agent_cli.api import recruiter_endpoints as ep
 from boss_agent_cli.api._base_client import _BaseHttpClient
 from boss_agent_cli.api.httpx_helpers import make_client_registry
+from boss_agent_cli.api.recruiter_resume import ResumeValidationError, attachment_params, incoming_message, resume_friend, save_resume
 from boss_agent_cli.api.zhipin_errors import classify_code_37
 
 _OPEN_CLIENTS, _close_open_clients = make_client_registry()
@@ -154,6 +157,8 @@ return {
 
 _EXCHANGE_COMPONENT_NAMES = {1: "ExchangePhone", 2: "ExchangeWx", 4: "ExchangeResume"}
 _EXCHANGE_MESSAGE_TEXT = {1: "请求交换联系方式", 2: "请求交换联系方式", 4: "方便发一份简历过来吗？"}
+_RESUME_REQUEST_DIALOG_TYPE = 2
+_RESUME_ACCEPT_TYPE = 3
 
 
 atexit.register(_close_open_clients)
@@ -179,6 +184,14 @@ class BossRecruiterClient(_BaseHttpClient):
 
 	def _unregister(self) -> None:
 		_OPEN_CLIENTS.discard(self)
+
+	def _headers_for(self, url: str) -> dict[str, str]:
+		headers = super()._headers_for(url)
+		if url in (ep.BOSS_RECOMMEND_GEEK_LIST_URL, ep.BOSS_CHAT_START_URL):
+			# 从当前 jar 取值，包含上次响应轮换的 bst；不改变既有端点的请求头。
+			if bst := self._get_client().cookies.get("bst"):
+				headers["zp_token"] = str(bst)
+		return headers
 
 	def _should_refresh_token_response(self, data: dict[str, Any]) -> bool:
 		return data.get("code") == ep.CODE_STOKEN_EXPIRED and classify_code_37(data) == "token_expired"
@@ -333,9 +346,10 @@ class BossRecruiterClient(_BaseHttpClient):
 			data["encJobId"] = job_id
 		return self._request("POST", ep.BOSS_FRIEND_LIST_URL, data=data)
 
-	def friend_detail(self, friend_ids: list[int]) -> dict[str, Any]:
+	def friend_detail(self, friend_ids: list[int], *, retry: bool = True) -> dict[str, Any]:
 		data = {"friendIds": ",".join(str(i) for i in friend_ids)}
-		return self._request("POST", ep.BOSS_FRIEND_DETAIL_URL, data=data)
+		options = {"retry": False, "follow_redirects": False} if not retry else {}
+		return self._request("POST", ep.BOSS_FRIEND_DETAIL_URL, data=data, **options)
 
 	def friend_labels(self) -> dict[str, Any]:
 		return self._request("GET", ep.BOSS_FRIEND_LABELS_URL)
@@ -353,6 +367,58 @@ class BossRecruiterClient(_BaseHttpClient):
 		if job_id:
 			params["encJobId"] = job_id
 		return self._request("GET", ep.BOSS_GREET_REC_LIST_URL, params=params)
+
+	def recommend_geeks(self, job_id: str, page: int = 1) -> dict[str, Any]:
+		"""Read the rich 推荐牛人 cards used by the first-contact endpoint."""
+		params: dict[str, Any] = {
+			"age": "16,-1",
+			"school": "0",
+			"activation": "0",
+			"recentNotView": "0",
+			"gender": "0",
+			"exchangeResumeWithColleague": "0",
+			"major": "0",
+			"switchJobFrequency": "0",
+			"keyword1": "-1",
+			"degree": "0",
+			"experience": "0",
+			"intention": "0",
+			"salary": "0",
+			"jobId": job_id,
+			"page": page,
+			"coverScreenMemory": "0",
+			"cardType": "0",
+		}
+		referer = (
+			f"{ep.BASE_URL}/web/frame/recommend/?jobid={job_id}&status=0&filterParams=&t="
+			"&inspectFilterGuide=&version=11211&source=0"
+		)
+		return self._request("GET", ep.BOSS_RECOMMEND_GEEK_LIST_URL, params=params, extra_headers={"Referer": referer})
+
+	def start_chat(
+		self,
+		*,
+		geek_id: str,
+		job_id: str,
+		expect_id: str,
+		lid: str,
+		security_id: str,
+		message: str,
+		suid: str = "",
+	) -> dict[str, Any]:
+		"""Create a recruiter conversation and send its first greeting."""
+		data = {
+			"gid": geek_id,
+			"suid": suid,
+			"jid": job_id,
+			"expectId": expect_id,
+			"lid": lid,
+			"greet": message,
+			"from": "",
+			"securityId": security_id,
+			"customGreetingGuide": "-1",
+		}
+		return self._request("POST", ep.BOSS_CHAT_START_URL, data=data, retry=False)
 
 	# ── 候选人搜索与简历 ──────────────────────────────────
 
@@ -431,11 +497,12 @@ class BossRecruiterClient(_BaseHttpClient):
 		data = {"friendIds": ",".join(str(i) for i in friend_ids), "src": 0}
 		return self._request("POST", ep.BOSS_LAST_MESSAGES_URL, data=data)
 
-	def chat_history(self, gid: int, *, count: int = 20, max_msg_id: int | None = None) -> dict[str, Any]:
+	def chat_history(self, gid: int, *, count: int = 20, max_msg_id: int | None = None, retry: bool = True) -> dict[str, Any]:
 		params: dict[str, Any] = {"gid": gid, "c": count, "src": 0}
 		if max_msg_id:
 			params["maxMsgId"] = max_msg_id
-		return self._request("GET", ep.BOSS_CHAT_HISTORY_URL, params=params)
+		options = {"retry": False, "follow_redirects": False} if not retry else {}
+		return self._request("GET", ep.BOSS_CHAT_HISTORY_URL, params=params, **options)
 
 	def send_message(self, gid: int, content: str) -> dict[str, Any]:
 		"""DEPRECATED: 旧的 fastReply/sendReplyMsg 端点已被 BOSS 弃用。
@@ -652,6 +719,73 @@ class BossRecruiterClient(_BaseHttpClient):
 				extra={"exchange_type": exchange_type, "componentName": component_name},
 			),
 		}
+
+	def accept_resume_by_friend(self, friend_id: int, message_id: int) -> dict[str, Any]:
+		"""同意指定会话中的附件简历请求；验证目标后仅发送一次 HTTP POST。
+
+		网页 v11308：dialog.type=2 对应 agreeAction=3，不能使用求简历的 type=4。
+		网页还注入动态 sigx；此处沿用原生 HTTP 认证，不伪造指纹或降级到浏览器。
+		"""
+		if friend_id <= 0 or message_id <= 0:
+			raise ResumeValidationError("friend_id 和 message_id 必须为正整数")
+		history = self.chat_history(friend_id, count=100, max_msg_id=message_id + 1, retry=False)
+		if history.get("code") != 0:
+			return history
+		message = incoming_message(history.get("zpData"), friend_id, message_id)
+		body = message.get("body") or {}
+		dialog = body.get("dialog") if isinstance(body, dict) else None
+		if not isinstance(dialog, dict) or body.get("type") != 7 or dialog.get("type") != _RESUME_REQUEST_DIALOG_TYPE:
+			raise ResumeValidationError("该消息不是附件简历请求，不会执行联系方式交换")
+		if dialog.get("operated") is not False:
+			raise ResumeValidationError("该请求已处理或状态不明，不会重复同意")
+		friends = self.friend_detail([friend_id], retry=False)
+		if friends.get("code") != 0:
+			return friends
+		friend = resume_friend(friends.get("zpData"), friend_id)
+		if not isinstance(friend.get("securityId"), str) or not friend["securityId"]:
+			raise ResumeValidationError("无法取得指定候选人的当前会话 securityId")
+		return self._request(
+			"POST", ep.BOSS_EXCHANGE_ACCEPT_URL,
+			data={"mid": message_id, "type": _RESUME_ACCEPT_TYPE, "securityId": friend["securityId"]},
+			retry=False,
+			follow_redirects=False,
+		)
+
+	def download_resume_by_friend(self, friend_id: int, message_id: int, output: Path) -> dict[str, Any]:
+		"""下载已收到的指定附件；不自动同意请求，不返回临时下载凭据。"""
+		if friend_id <= 0 or message_id <= 0:
+			raise ResumeValidationError("friend_id 和 message_id 必须为正整数")
+		if output.exists() or output.is_symlink():
+			raise FileExistsError("输出文件已存在，不会覆盖")
+		history = self.chat_history(friend_id, count=100, max_msg_id=message_id + 1, retry=False)
+		if history.get("code") != 0:
+			return history
+		message = incoming_message(history.get("zpData"), friend_id, message_id)
+		params = attachment_params(message)
+		friends = self.friend_detail([friend_id], retry=False)
+		if friends.get("code") != 0:
+			return friends
+		friend = resume_friend(friends.get("zpData"), friend_id)
+		geek_id = friend.get("encryptUid")
+		if not isinstance(geek_id, str) or not geek_id or geek_id in (".", ".."):
+			raise ResumeValidationError("当前会话缺少候选人的 encryptUid")
+		check = self._request("GET", ep.BOSS_RESUME_PREVIEW_CHECK_URL, params={"geekId": geek_id, **params}, retry=False, follow_redirects=False)
+		if check.get("code") != 0:
+			return check
+		detail = check.get("zpData")
+		if not isinstance(detail, dict) or detail.get("isResumeVisible") is not True or detail.get("expired") not in (None, False, 0):
+			raise ResumeValidationError("附件不可访问或已过期，请在官方页面核对")
+		# isCanPreview=false 仅表示无法在线预览，网页仍允许下载原附件。
+		if isinstance(detail.get("d"), str) and detail["d"]:
+			params["d"] = detail["d"]
+		url = ep.BOSS_RESUME_DOWNLOAD_URL + quote(geek_id, safe="")
+		self._throttle.wait()
+		try:
+			with self._get_client().stream("GET", url, params=params, headers={"Referer": ep.WEB_BOSS_CHAT}, follow_redirects=False) as response:
+				file_data = save_resume(response, output)
+		finally:
+			self._throttle.mark()
+		return {"code": 0, "zpData": file_data}
 
 	def exchange_content(self, uid: int) -> dict[str, Any]:
 		data = {"uid": uid}

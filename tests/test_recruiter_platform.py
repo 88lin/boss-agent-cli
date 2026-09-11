@@ -30,6 +30,24 @@ def test_boss_recruiter_is_success():
 	assert platform.is_success({"code": 1}) is False
 
 
+@pytest.mark.parametrize("data, expected", [
+	({"chat": 0, "status": 3, "limitTitle": "今日主动沟通人数已达上限"}, "GREET_LIMIT"),
+	({"chat": 0, "status": 99}, "GREET_RESULT_UNKNOWN"),
+	({"chat": 0, "status": 3, "limitTitle": None}, "GREET_RESULT_UNKNOWN"),
+	({"chat": 1, "status": 3, "limitTitle": "旧提示"}, None),
+	({}, None),
+])
+def test_start_chat_checks_business_result_without_changing_other_endpoints(data, expected):
+	from boss_agent_cli.api.recruiter_endpoints import BOSS_CHAT_START_URL
+	platform = BossRecruiterPlatform(_mock_client())
+	response = {"code": 0, "zpData": data, "__cli_endpoint_hint__": BOSS_CHAT_START_URL}
+	assert platform.is_success(response) is (expected is None)
+	if expected:
+		assert platform.parse_error(response)[0] == expected
+	response["__cli_endpoint_hint__"] = "/unrelated-endpoint"
+	assert platform.is_success(response) is True
+
+
 def test_boss_recruiter_unwrap_data():
 	client = _mock_client()
 	platform = BossRecruiterPlatform(client)

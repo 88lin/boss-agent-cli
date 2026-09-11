@@ -12,7 +12,7 @@ boss schema --format anthropic-tools   # export Claude Tool Use definitions
 boss <cmd> --help                      # options for a single command
 ```
 
-`boss schema` currently exposes 39 top-level commands, plus 9 first-level recruiter
+`boss schema` currently exposes 39 top-level commands, plus 13 first-level recruiter
 subcommands under `hr`, grouped below by workflow stage.
 
 Compatibility setting: `boss config set operating_mode assisted|research`. Both modes can call every implemented capability; schema still reports risk/data classifications, and missing platform implementations return `NOT_SUPPORTED`.
@@ -45,6 +45,20 @@ In a TTY only `operator_actions` is rendered, to stderr; `next_actions` stays an
 | `boss status` | Check login state (local-only by default; `--live` runs a low-frequency read-only probe) |
 | `boss doctor` | Diagnose environment, dependencies, credential integrity, and network; local-only by default, `--live-probe` opts into a read-only probe |
 | `boss me` | My info (profile / resume / expectations / application records) |
+
+### Import a browser cURL session
+
+If browser Cookie extraction is unavailable, use **Copy as cURL (bash)** on your own authenticated `https://www.zhipin.com` request and save the raw text in a private file:
+
+```bash
+boss login --curl-file /path/to/private-request.txt
+# macOS: read the clipboard through stdin instead of putting credentials in arguments
+pbpaste | boss login --curl-file -
+```
+
+Supports common POSIX cURL syntax, not PowerShell/cmd or Markdown-escaped text. Cannot be combined with `--cdp` / `--cookie-source`. Extracts only inline Cookies, User-Agent and the stoken Cookie; never executes cURL, reads referenced files or replays the request body. One read-only check uses the existing user-info endpoint. Only successful verification **replaces the native encrypted BOSS session**, without merging another account's old Cookies. Verification failure preserves the existing session and does not launch a browser.
+
+This is an alternative credential input, not a login/risk-control bypass or a copy of the browser fingerprint. Later refreshes still follow AuthManager and browser-source policies; browser-free operation is not guaranteed. The `zp_token` header is not persisted separately; recruiter requests derive it from the current `bst` Cookie. Source files and clipboard contents remain sensitive and are not removed by the CLI; do not commit them or paste them into chats.
 
 ## Discovery
 
@@ -120,6 +134,30 @@ After every page, `<data-dir>/crawl/runs/<run_id>/jobs.json`, `jobs.csv`, and a 
 |---------|-------------|
 | `boss hr jobs list/offline/online/detail` | Job listing, detail, and lifecycle management |
 | `boss hr applications` / `hr resume` / `hr chat` / `hr chatmsg` / `hr last-messages` / `hr candidates` / `hr reply` / `hr request-resume` | Candidate applications, resumes, conversations, search, replies, and attached-resume requests |
+| `boss hr recommendations --job-id <encJobId>` | Read rich recommended-candidate cards and first-contact parameters |
+| `boss hr accept-resume <friend_id> --message-id <mid> --yes` | Accept a specific incoming attached-resume request |
+| `boss hr download-resume <friend_id> --message-id <mid> --output <path>` | Check access and download an already received attachment without overwriting files |
+| `boss hr greet ... --message <text> --yes` | Create a conversation and send first contact once, without changing read status |
+
+Preview the candidate parameters and message with `--dry-run`. Replace it with `--yes` only after the operator explicitly approves that candidate and message. MCP omits `yes` by default; agents must not infer approval, and a preview is not human authorization.
+
+`greet` atomically reserves the encrypted candidate/job pair locally and records a confirmed send. A lost response, process exit, or rate limit leaves the reservation in place and blocks automatic resending. Check `boss hr chat --job-id <id>` and use the official page if needed; do not delete the reservation to resend.
+
+`greet` only sends first contact. It does not open an MQTT connection or clear unread state. Success returns `sent=true`; if saving local state fails after sending, the error envelope preserves `error.details.sent=true`. Never resend because local bookkeeping failed. BOSS can return a quota-block page inside a `code=0` response; the CLI recognizes this business rejection and returns `GREET_LIMIT` with `error.details.sent=false` and a redacted platform message. The rejected candidate/job pair remains reserved to prevent retries. Platform limits may be per job and lower than a caller's configured daily budget. Unknown unread counts in `chat` / `last-messages` remain `null`, not zero.
+
+### Accepting and downloading attached resumes
+
+Use `boss hr chatmsg <friend_id>` to identify the exact request. `accept-resume --message-id` takes the request message's `mid`, not a candidate or attachment ID. `--dry-run` previews the target offline without validating its current state; `--yes` requires explicit operator approval. Before one non-retried POST, the command checks the sender, dialog type, unprocessed status and current conversation. Only `code=0` with `zpData.status=0` produces `accepted=true`. Unknown results or additional platform confirmation require checking the official page, not automatic resubmission.
+
+Unconfirmed acceptance uses `RESUME_ACCEPT_RESULT_UNKNOWN` with `accepted=null` and `recoverable=false`; never automatically resend. Recognized authentication and risk errors retain their codes but also prohibit automatic acceptance retries. Without `--yes`, `CONFIRMATION_REQUIRED` requires explicit approval of the specific operation; an agent must not supply that approval itself.
+
+After acceptance, read the chat again and locate the received attachment card (`body.hyperLink.hyperLinkType` 1 or 9). Pass that **attachment message's mid**, not the request mid, to `boss hr download-resume <friend_id> --message-id <attachment_mid> --output ./resume.pdf`. The command supports ordinary BOSS conversations (`friendSource=0`), reads the attachment parameters and current conversation identity, then checks `preview/check.json`. Hidden or expired attachments are blocked. Preview unavailability alone does not prohibit downloading.
+
+Downloads use the fixed official `docdownload.zhipin.com` host and do not follow redirects or fetch arbitrary card URLs. The command never accepts a request, asks for a resume, changes email settings or starts MQTT. Files are limited to 20 MiB, identified as PDF/DOC/DOCX/PNG/JPEG, and require a matching output extension and an existing parent directory. Files are created with `O_CREAT|O_EXCL` and private permissions, without overwriting existing paths or requiring hard links. Write failures remove the newly created partial file; cleanup after forced process termination is not guaranteed. Temporary access credentials are not returned. File signature checks are not malware scanning.
+
+HTTP 401/403 from the binary download maps to `AUTH_REQUIRED`. Download errors `AUTH_REQUIRED`, `TOKEN_REFRESH_FAILED` and `NETWORK_ERROR` use the recovery contract from `boss schema`; retry the download after resolving authentication or network issues. Unrecognized platform errors map to `NETWORK_ERROR`. `ACCOUNT_RISK` and `ENVIRONMENT_RISK` still stop automation without automatic login, refresh or retry. Recoverable downloads do not authorize resubmitting acceptance requests.
+
+Both commands reuse native CLI authentication. This implementation follows static web v11308 code and is covered by offline regression tests for this consolidation, which do not establish availability for every account or risk-control scenario. The webpage also injects dynamic `sigx` for acceptance; the HTTP implementation does not fabricate fingerprints or automatically launch a browser to bypass rejection. MCP tools are `boss_hr_accept_resume` and `boss_hr_download_resume`. Acceptance, download, delivery/read status and unread cleanup are separate states.
 
 ## Resume & AI
 

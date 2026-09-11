@@ -1,0 +1,162 @@
+"""招聘者 — 推荐候选人与首次招呼。"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import click
+
+from boss_agent_cli.api.browser_source import BrowserSourceUnavailable
+from boss_agent_cli.api.client import AccountRiskError
+from boss_agent_cli.api.recruiter_client import RecruiterAuthError
+from boss_agent_cli.auth.manager import AuthManager, AuthRequired, TokenRefreshFailed
+from boss_agent_cli.cache.store import CacheStore
+from boss_agent_cli.compliance import require_compliance_allowed
+from boss_agent_cli.commands._recruiter_platform import get_recruiter_platform_instance
+from boss_agent_cli.display import error_contract_for_code, handle_auth_errors, handle_error_output, handle_output, handle_platform_error_output
+
+
+@click.command("recommendations")
+@click.option("--job-id", required=True, help="招聘职位的加密 ID")
+@click.option("--page", default=1, type=click.IntRange(min=1), help="页码")
+@click.pass_context
+@handle_auth_errors("recruiter-recommendations")
+def recommendations_cmd(ctx: click.Context, job_id: str, page: int) -> None:
+	"""读取推荐牛人完整卡片和首次开聊参数。"""
+	if not require_compliance_allowed(ctx, "recruiter-recommendations"):
+		return
+	auth = AuthManager(ctx.obj["data_dir"], logger=ctx.obj["logger"], platform=ctx.obj.get("platform", "zhipin"))
+	with get_recruiter_platform_instance(ctx, auth) as platform:
+		result = platform.recommend_geeks(job_id, page=page)
+		if not platform.is_success(result):
+			handle_platform_error_output(ctx, "recruiter-recommendations", platform, result, fallback_message="推荐牛人获取失败")
+			return
+		handle_output(
+			ctx, "recruiter-recommendations", platform.unwrap_data(result) or {},
+			hints={"next_actions": ["boss hr greet --help — 先预览候选人和话术，再由操作者确认"]},
+		)
+
+
+def _send_error(ctx: click.Context, *, code: str, job_id: str, details: dict[str, Any]) -> None:
+	"""保留发送状态并停止工作流，禁止把写失败解释为自动重发。"""
+	check = f"boss hr chat --job-id {job_id}"
+	message = "招呼已发送，但本地状态保存失败；停止后续建联" if details.get("sent") else "首次招呼未确认成功；停止发送并核对会话"
+	if code == "ALREADY_GREETED":
+		message = "该候选人在此职位下已发送过招呼，禁止重复发送"
+	if code == "GREET_LIMIT":
+		message = str(details.get("platform_message") or "该职位的主动沟通权益已用完，本次未发送")
+		action = "停止该职位的新招呼，等待平台权益恢复；不要自动重发本次招呼"
+		hints = {"operator_actions": [action]}
+	elif code == "ACCOUNT_RISK":
+		action = "账号已触发风控，停止自动化访问；回到 BOSS 直聘官方页面处理"
+		hints = {"operator_actions": [action, "禁止重新发送本次招呼"]}
+	elif code == "ENVIRONMENT_RISK":
+		action = (error_contract_for_code(code)[1] or "停止自动化访问") + "；不要自动重发本次招呼"
+		hints = {"operator_actions": [action, "不要刷新 Token、重新登录或自动重试该请求"]}
+	else:
+		action = f"先用 {check} 确认该候选人会话是否已建立；不要自动重发"
+		hints = {"operator_actions": [message, action], "next_actions": [check]}
+	handle_error_output(
+		ctx, "recruiter-greet", code=code, message=message, recoverable=False,
+		recovery_action=action, details=details, hints=hints,
+	)
+
+
+@click.command("greet")
+@click.option("--geek-id", required=True, help="recommendations 返回的 encryptGeekId")
+@click.option("--job-id", required=True, help="recommendations 返回的 encryptJobId")
+@click.option("--expect-id", required=True, help="recommendations 返回的 expectId")
+@click.option("--lid", required=True, help="recommendations 返回的 lid")
+@click.option("--security-id", required=True, help="recommendations 返回的 securityId")
+@click.option("--suid", default="", help="可选 suid；当前推荐接口通常为空")
+@click.option("--message", required=True, help="首次招呼内容")
+@click.option("--yes", is_flag=True, help="操作者已明确批准此候选人和话术")
+@click.option("--dry-run", is_flag=True, help="只预览候选人和话术，不发送")
+@click.pass_context
+@handle_auth_errors("recruiter-greet")
+def greet_cmd(
+	ctx: click.Context,
+	geek_id: str,
+	job_id: str,
+	expect_id: str,
+	lid: str,
+	security_id: str,
+	suid: str,
+	message: str,
+	yes: bool,
+	dry_run: bool,
+) -> None:
+	"""建立候选人会话并发送首次招呼。"""
+	if not require_compliance_allowed(ctx, "recruiter-greet"):
+		return
+	data: dict[str, Any] = {"geek_id": geek_id, "job_id": job_id, "sent": False}
+	if not message.strip():
+		handle_error_output(ctx, "recruiter-greet", code="INVALID_PARAM", message="首次招呼内容不能为空")
+		return
+	if dry_run:
+		operator_actions = ["核对候选人和话术；明确批准后才可加 --yes 发送"]
+		handle_output(
+			ctx, "recruiter-greet", {**data, "dry_run": True, "message": message},
+			hints={"operator_actions": operator_actions},
+		)
+		return
+	if not yes:
+		handle_error_output(
+			ctx, "recruiter-greet", code="CONFIRMATION_REQUIRED",
+			message="尚未获得操作者对该候选人和话术的明确批准", recoverable=True,
+			recovery_action="确认候选人和话术后重新执行并加 --yes",
+		)
+		return
+	auth = AuthManager(ctx.obj["data_dir"], logger=ctx.obj["logger"], platform=ctx.obj.get("platform", "zhipin"))
+	with get_recruiter_platform_instance(ctx, auth) as platform, CacheStore(ctx.obj["data_dir"] / "cache" / "boss_agent.db") as cache:
+		auth.get_token()
+		previous = cache.claim_recruiter_greet(geek_id, job_id)
+		if previous is not None:
+			data["sent"] = True if previous == "sent" else False if previous == "quota_limited" else None
+			code = "ALREADY_GREETED" if previous == "sent" else "GREET_LIMIT" if previous == "quota_limited" else "GREET_RESULT_UNKNOWN"
+			_send_error(ctx, code=code, job_id=job_id, details=data)
+			return
+		# 预约后即使进程退出也不自动再发；通用异常处理不得把写失败提示为“重试”。
+		data["sent"] = None
+		try:
+			result = platform.start_chat(
+				geek_id=geek_id, job_id=job_id, expect_id=expect_id, lid=lid,
+				security_id=security_id, message=message, suid=suid,
+			)
+		except AccountRiskError:
+			_send_error(ctx, code="ACCOUNT_RISK", job_id=job_id, details=data)
+			return
+		except BrowserSourceUnavailable as exc:
+			_send_error(ctx, code=exc.code, job_id=job_id, details=data)
+			return
+		except TokenRefreshFailed:
+			_send_error(ctx, code="TOKEN_REFRESH_FAILED", job_id=job_id, details=data)
+			return
+		except (AuthRequired, RecruiterAuthError):
+			_send_error(ctx, code="AUTH_REQUIRED", job_id=job_id, details=data)
+			return
+		except Exception:
+			# 仅此不可逆写入边界兜底未知异常：响应丢失也可能已建联，保留 pending。
+			_send_error(ctx, code="GREET_RESULT_UNKNOWN", job_id=job_id, details=data)
+			return
+		if not platform.is_success(result):
+			code, platform_message = platform.parse_error(result)
+			data["platform_message"] = platform_message
+			if type(result.get("code")) is int:
+				data["platform_code"] = result["code"]
+			if code == "GREET_LIMIT":
+				data["sent"] = False
+				try:
+					cache.record_recruiter_greet(geek_id, job_id, status="quota_limited")
+				except Exception:
+					# 即使记账失败也保留平台明确拒绝的事实；原 pending 仍阻止重发。
+					pass
+			_send_error(ctx, code=code if code != "UNKNOWN" else "GREET_RESULT_UNKNOWN", job_id=job_id, details=data)
+			return
+		data["sent"] = True
+		try:
+			cache.record_recruiter_greet(geek_id, job_id)
+		except Exception:
+			_send_error(ctx, code="GREET_RESULT_UNKNOWN", job_id=job_id, details=data)
+			return
+		handle_output(ctx, "recruiter-greet", data)

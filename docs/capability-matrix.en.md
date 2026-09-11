@@ -105,7 +105,11 @@ Compatibility modes `assisted` and `research` can both call every implemented ca
 | Contact exchange | `boss hr resume --exchange --friend-id <friend_id> [--type wechat]` | Yes | Recruiter platform adapter |
 | Reply to candidate | `boss hr reply <friend_id> <message>` | Yes | Recruiter platform adapter |
 | Request attached resume | `boss hr request-resume <friend_id>` | Yes | Recruiter platform adapter |
+| Accept attached resume | `boss hr accept-resume <friend_id> --message-id <mid> --yes` | Yes | One-shot HTTP with explicit approval; requires business status zero; offline regression coverage |
+| Download received attachment | `boss hr download-resume <friend_id> --message-id <mid> --output <path>` | Yes | Access check, fixed official host, size limit, no overwrite; offline regression coverage |
 | Job listing and online/offline operations | `boss hr jobs` | Yes | httpx |
+| Recommended candidates | `boss hr recommendations --job-id <id>` | Yes | httpx |
+| First contact | `boss hr greet ... --yes` | Yes | One-shot httpx POST; does not change read status |
 
 Notes:
 - **Transport**: `httpx` means a direct API call. Risk-control blocks stop the workflow. Browser/hook adapters may not retry without bounds and must preserve checkpoints and redaction. `AI service` means a third-party model API; do not send chat records, resumes, or contact details without authorization.
@@ -113,4 +117,4 @@ Notes:
 - For CLI-first integrations, prefer `boss schema` for capability discovery and parameter validation; the schema exposes both `supported_platforms` and `supported_recruiter_platforms`.
 - Current platform coverage: `zhipin` has both candidate and recruiter implementations; `zhilian` supports candidate-side workflows and recruiter automation through the `agent` browser/CDP adapter V1; `qiancheng` / 51job is a registered placeholder adapter whose real workflows return `NOT_SUPPORTED`.
 - `crawl` uses an isolated Chrome profile, cross-process rate budgets, SQLite checkpoints, and the `crawl stop` kill switch. Fine-grained MCP crawl tools provide local `crawl_status/results/shortlist` operations for existing runs, while `boss_wizard` can start, resume, and stop the shared workflow. The default Hook is `none`; local Hook directories must provide `SHA256SUMS`. Risk codes, a security page, or an exhausted budget stop it and return a resume command.
-- Use `boss schema` as the source of truth: it currently exposes 39 top-level commands, with 9 first-level recruiter subcommands under `hr`, while `ai` and `resume` remain command-group entries.
+- Use `boss schema` as the source of truth: it currently exposes 39 top-level commands, with 13 first-level recruiter subcommands under `hr`, while `ai` and `resume` remain command-group entries.

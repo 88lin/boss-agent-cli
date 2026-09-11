@@ -73,6 +73,14 @@ endpoints:
     method: GET
     path: "/wapi/zpchat/boss/newgreeting/getHistoryList"
     referer: "/web/chat/index"
+  boss_recommend_geek_list:
+    method: GET
+    path: "/wapi/zpjob/rec/geek/list"
+    referer: "/web/frame/recommend/"
+  boss_chat_start:
+    method: POST
+    path: "/wapi/zpjob/chat/start"
+    referer: "/web/frame/recommend/"
 
   # ── 候选人搜索与简历查看 ────────────────────────────
   boss_search_geek:
@@ -118,11 +126,22 @@ endpoints:
     method: POST
     path: "/wapi/zpchat/exchange/request"
     referer: "/web/chat/index"
+  boss_exchange_accept:
+    method: POST
+    path: "/wapi/zpchat/exchange/accept"
+    referer: "/web/chat/index"
+  boss_resume_preview_check:
+    method: GET
+    path: "/wapi/zpgeek/resume/boss/preview/check.json"
+    referer: "/web/chat/index"
+  boss_resume_download:
+    method: GET
+    url: "https://docdownload.zhipin.com/wflow/zpgeek/download/download4boss/"
+    referer: "/web/chat/index"
   boss_exchange_content:
     method: POST
     path: "/wapi/zprelation/friend/getExchangeContent"
     referer: "/web/chat/index"
-
   # ── 面试 ────────────────────────────────────────────
   boss_interview_list:
     method: GET

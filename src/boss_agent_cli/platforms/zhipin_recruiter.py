@@ -1,15 +1,16 @@
 """BOSS 直聘招聘者平台 adapter。
 
-把 ``BossRecruiterClient`` 包装为 ``RecruiterPlatform`` 实现，零行为变化。
+把 ``BossRecruiterClient`` 包装为 ``RecruiterPlatform`` 实现，统一包络与业务拒绝语义。
 后续新平台实现同一 RecruiterPlatform 接口，
 命令层可以通过 ``get_recruiter_platform(name)`` 无差别调用。
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from boss_agent_cli.api.recruiter_endpoints import BASE_URL, CODE_STOKEN_EXPIRED
+from boss_agent_cli.api.recruiter_endpoints import BASE_URL, BOSS_CHAT_START_URL, CODE_STOKEN_EXPIRED
 from boss_agent_cli.api.zhipin_errors import classify_code_37, response_message
 from boss_agent_cli.platforms.recruiter_base import RecruiterPlatform
 
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
 
 # BOSS 直聘错误码 → 统一错误码映射
 _ERROR_CODE_MAP: dict[int, str] = {
+	7: "AUTH_REQUIRED",
 	9: "RATE_LIMITED",
 	36: "ACCOUNT_RISK",
 	121: "INVALID_PARAM",
@@ -27,6 +29,20 @@ _ERROR_CODE_MAP: dict[int, str] = {
 # 端点路径片段 → 已知端点漂移场景（命中后将该路径下的 121 重映射为 ENDPOINT_DEPRECATED）
 # 真源：issue #217 — qianjunye 抓包确认 fastReply/sendReplyMsg 已被 BOSS 替换为 WS+Protobuf 双通道。
 _DEPRECATED_ENDPOINT_FRAGMENTS: tuple[str, ...] = ("fastReply/sendReplyMsg",)
+
+
+def _greet_business_error(response: dict[str, Any]) -> tuple[str, str] | None:
+	"""首次开聊的 code=0 也可能只是成功返回权益拦截页。"""
+	if response.get("code") != 0 or response.get("__cli_endpoint_hint__") != BOSS_CHAT_START_URL:
+		return None
+	data = response.get("zpData")
+	if not isinstance(data, dict) or type(data.get("chat")) is not int or data["chat"] != 0:
+		return None
+	title = data.get("limitTitle")
+	if type(data.get("status")) is int and data["status"] == 3 and isinstance(title, str) and title.strip():
+		description = data.get("stateDesc") or data.get("stateDes")
+		return "GREET_LIMIT", f"{title}；{description}" if isinstance(description, str) and description else title
+	return "GREET_RESULT_UNKNOWN", "平台返回未开聊状态，未确认首次招呼成功"
 
 
 class BossRecruiterPlatform(RecruiterPlatform):
@@ -43,12 +59,15 @@ class BossRecruiterPlatform(RecruiterPlatform):
 	# ── 包络适配 ────────────────────────────────────────
 
 	def is_success(self, response: dict[str, Any]) -> bool:
-		return response.get("code") == 0
+		return response.get("code") == 0 and _greet_business_error(response) is None
 
 	def unwrap_data(self, response: dict[str, Any]) -> Any:
 		return response.get("zpData")
 
 	def parse_error(self, response: dict[str, Any]) -> tuple[str, str]:
+		greet_error = _greet_business_error(response)
+		if greet_error is not None:
+			return greet_error
 		code = response.get("code")
 		message = response_message(response)
 		if code == CODE_STOKEN_EXPIRED:
@@ -79,6 +98,20 @@ class BossRecruiterPlatform(RecruiterPlatform):
 
 	def greet_rec_list(self, page: int = 1, job_id: str | None = None) -> dict[str, Any]:
 		return self._client.greet_rec_list(page=page, job_id=job_id)
+
+	def recommend_geeks(self, job_id: str, page: int = 1) -> dict[str, Any]:
+		return self._client.recommend_geeks(job_id, page=page)
+
+	def start_chat(self, *, geek_id: str, job_id: str, expect_id: str, lid: str, security_id: str, message: str, suid: str = "") -> dict[str, Any]:
+		return self._client.start_chat(
+			geek_id=geek_id,
+			job_id=job_id,
+			expect_id=expect_id,
+			lid=lid,
+			security_id=security_id,
+			message=message,
+			suid=suid,
+		)
 
 	# ── 候选人搜索与简历 ────────────────────────────────
 
@@ -158,8 +191,14 @@ class BossRecruiterPlatform(RecruiterPlatform):
 	def exchange_request_by_friend(self, friend_id: int, exchange_type: int) -> dict[str, Any]:
 		return self._client.exchange_request_by_friend(friend_id, exchange_type)
 
+	def accept_resume_by_friend(self, friend_id: int, message_id: int) -> dict[str, Any]:
+		return self._client.accept_resume_by_friend(friend_id, message_id)
+
 	def exchange_content(self, uid: int) -> dict[str, Any]:
 		return self._client.exchange_content(uid)
+
+	def download_resume_by_friend(self, friend_id: int, message_id: int, output: Path) -> dict[str, Any]:
+		return self._client.download_resume_by_friend(friend_id, message_id, output)
 
 	# ── 面试 ──────────────────────────────────────────────
 

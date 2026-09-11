@@ -1,0 +1,115 @@
+"""招聘者 — 下载已收到的附件简历。"""
+
+from pathlib import Path
+
+import click
+
+from boss_agent_cli.api.client import AccountRiskError
+from boss_agent_cli.api.recruiter_client import RecruiterAuthError
+from boss_agent_cli.api.recruiter_resume import ResumeValidationError
+from boss_agent_cli.auth.manager import AuthManager, AuthRequired, TokenRefreshFailed
+from boss_agent_cli.commands._recruiter_platform import get_recruiter_platform_instance
+from boss_agent_cli.compliance import require_compliance_allowed
+from boss_agent_cli.display import error_contract_for_code, handle_auth_errors, handle_error_output, handle_output
+
+
+@click.command("download-resume")
+@click.argument("friend_id", type=click.IntRange(min=1))
+@click.option(
+	"--message-id",
+	required=True,
+	type=click.IntRange(min=1),
+	help="hr chatmsg 返回的已收到附件消息 mid（不是请求 mid）",
+)
+@click.option(
+	"--output",
+	required=True,
+	type=click.Path(dir_okay=False, path_type=Path),
+	help="本地文件路径，支持 PDF/Word/PNG/JPEG；不覆盖已有文件",
+)
+@click.pass_context
+@handle_auth_errors("recruiter-download-resume")
+def download_resume_cmd(ctx: click.Context, friend_id: int, message_id: int, output: Path) -> None:
+	"""检查权限后下载指定附件；不自动同意、不索要简历、不发送已读回执。"""
+	if not require_compliance_allowed(ctx, "recruiter-download-resume"):
+		return
+	command = "recruiter-download-resume"
+	auth = AuthManager(ctx.obj["data_dir"], logger=ctx.obj["logger"], platform=ctx.obj.get("platform", "zhipin"))
+	with get_recruiter_platform_instance(ctx, auth) as platform:
+		auth.get_token()
+		try:
+			result = platform.download_resume_by_friend(friend_id, message_id, output)
+		except ResumeValidationError as exc:
+			handle_error_output(ctx, command, code="INVALID_PARAM", message=str(exc))
+			return
+		except FileExistsError:
+			handle_error_output(ctx, command, code="INVALID_PARAM", message="输出文件已存在，请指定新文件名；不会覆盖")
+			return
+		except NotImplementedError:
+			handle_error_output(ctx, command, code="PLATFORM_NOT_SUPPORTED", message="当前平台不支持下载附件简历")
+			return
+		except OSError:
+			handle_error_output(ctx, command, code="INVALID_PARAM", message="无法保存文件，请检查目标目录与写入权限")
+			return
+		except (AuthRequired, RecruiterAuthError):
+			recoverable, recovery_action = error_contract_for_code("AUTH_REQUIRED")
+			handle_error_output(
+				ctx,
+				command,
+				code="AUTH_REQUIRED",
+				message="登录态不可用，请重新登录后下载",
+				recoverable=recoverable,
+				recovery_action=recovery_action,
+			)
+			return
+		except TokenRefreshFailed:
+			recoverable, recovery_action = error_contract_for_code("TOKEN_REFRESH_FAILED")
+			handle_error_output(
+				ctx,
+				command,
+				code="TOKEN_REFRESH_FAILED",
+				message="登录态刷新失败，请重新登录后下载",
+				recoverable=recoverable,
+				recovery_action=recovery_action,
+			)
+			return
+		except AccountRiskError:
+			handle_error_output(
+				ctx,
+				command,
+				code="ACCOUNT_RISK",
+				message="账号已触发风控，停止自动化访问并在官方页面处理",
+				recoverable=False,
+				hints={"operator_actions": ["账号已触发风控，停止自动化访问并在官方页面处理"]},
+			)
+			return
+		except Exception:
+			# httpx 异常可能带有含临时凭据的 URL，不透传异常文本。
+			recoverable, recovery_action = error_contract_for_code("NETWORK_ERROR")
+			handle_error_output(
+				ctx,
+				command,
+				code="NETWORK_ERROR",
+				message="附件下载未完成，请检查网络后重试",
+				recoverable=recoverable,
+				recovery_action=recovery_action,
+			)
+			return
+		if not platform.is_success(result):
+			code, _ = platform.parse_error(result)
+			code = code if code != "UNKNOWN" else "NETWORK_ERROR"
+			recoverable, recovery_action = error_contract_for_code(code)
+			handle_error_output(
+				ctx,
+				command,
+				code=code,
+				message="平台未允许获取附件，请在官方页面核对登录态与附件权限",
+				recoverable=recoverable,
+				recovery_action=recovery_action,
+			)
+			return
+		handle_output(
+			ctx,
+			command,
+			{"friend_id": friend_id, "message_id": message_id, "downloaded": True, **platform.unwrap_data(result)},
+		)

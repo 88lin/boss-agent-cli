@@ -226,7 +226,7 @@ def test_crawl_tools_only_read_or_locally_shortlist_existing_runs():
 
 def test_tool_count():
 	"""工具总数应与当前注册一致。"""
-	assert len(TOOLS) == 73
+	assert len(TOOLS) == 77
 
 
 def test_mcp_tool_count_matches_readme():
@@ -830,7 +830,7 @@ def test_build_args_favorites_list_is_fixed_to_job_favorites():
 
 def test_tool_count_after_pr41():
 	"""协议服务工具总数应与当前 MCP 暴露能力完全一致。"""
-	assert len(TOOLS) == 73
+	assert len(TOOLS) == 77
 
 
 def test_build_args_shortlist_add():
@@ -947,8 +947,8 @@ def test_build_args_hr_chatmsg():
 
 
 def test_build_args_hr_last_messages():
-	args = _build_args("boss_hr_last_messages", {"friend_ids": [12345, 67890], "page": 2})
-	assert args == ["hr", "last-messages", "--friend-id", "12345", "--friend-id", "67890", "--page", "2"]
+	args = _build_args("boss_hr_last_messages", {"friend_ids": [12345, 67790], "page": 2})
+	assert args == ["hr", "last-messages", "--friend-id", "12345", "--friend-id", "67790", "--page", "2"]
 
 
 def test_build_args_hr_resume():

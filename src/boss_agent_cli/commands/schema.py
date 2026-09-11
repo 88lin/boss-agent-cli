@@ -288,6 +288,11 @@ SCHEMA_DATA = {
 			"description": "按当前平台登录（zhipin / zhilian）；两种兼容运行模式共享相同能力，平台风控仍会停止当前流程。",
 			"args": [],
 			"options": {
+				"--curl-file": {
+					"type": "string",
+					"default": None,
+					"description": "从 Copy as cURL (bash) 文件导入 BOSS 登录态，- 表示标准输入；验证后替换原生会话，不执行原请求，不能与 --cdp 或 --cookie-source 混用",
+				},
 				"--timeout": {
 					"type": "int",
 					"default": 120,
@@ -1049,7 +1054,21 @@ SCHEMA_DATA = {
 		"hr": {
 			"description": "招聘者模式快捷命令。已实现的候选人搜索、简历、沟通、联系方式交换和消息发送在 assisted/research 下均可调用。",
 			"args": [],
-			"options": {},
+			"options": {
+				"greet": {
+					"--yes": {"type": "bool", "default": False, "description": "操作者明确批准该候选人和话术后才可发送"},
+					"--dry-run": {"type": "bool", "default": False, "description": "只预览，不发送"},
+				},
+				"accept-resume": {
+					"--message-id": {"type": "int", "required": True, "description": "候选人发来的附件简历请求 mid"},
+					"--yes": {"type": "bool", "default": False, "description": "操作者明确批准同意这条请求"},
+					"--dry-run": {"type": "bool", "default": False, "description": "只预览，不请求平台"},
+				},
+				"download-resume": {
+					"--message-id": {"type": "int", "required": True, "description": "已收到的附件消息 mid，不是请求 mid"},
+					"--output": {"type": "string", "required": True, "description": "本地输出文件路径，不覆盖已有文件"},
+				},
+			},
 			"subcommands": {
 				"applications": "查看候选人投递申请列表",
 				"resume": "查看候选人在线简历或发起联系方式交换",
@@ -1060,6 +1079,10 @@ SCHEMA_DATA = {
 				"candidates": "搜索候选人",
 				"reply": "回复候选人消息",
 				"request-resume": "请求候选人分享附件简历",
+				"accept-resume": "同意指定候选人的附件简历请求（需 --yes），不下载附件",
+				"download-resume": "检查权限并下载已收到的附件简历，不自动同意请求",
+				"recommendations": "读取推荐牛人完整卡片和首次开聊参数",
+				"greet": "单次建立候选人会话并发送首次招呼（需 --yes），不修改已读状态",
 			},
 		},
 	},
@@ -1111,6 +1134,21 @@ SCHEMA_DATA = {
 		},
 	},
 	"error_codes": {
+		"CONFIRMATION_REQUIRED": {
+			"message": "尚未获得操作者对本次操作的明确批准",
+			"recoverable": True,
+			"recovery_action": "确认操作目标与内容后重新执行并加 --yes",
+		},
+		"RESUME_ACCEPT_RESULT_UNKNOWN": {
+			"message": "同意附件简历请求的结果未确认，禁止自动重试",
+			"recoverable": False,
+			"recovery_action": "在官方页面核对请求状态，不要自动重试",
+		},
+		"GREET_RESULT_UNKNOWN": {
+			"message": "首次招呼状态未确认，禁止自动重发",
+			"recoverable": False,
+			"recovery_action": "先用 boss hr chat --job-id <id> 核对会话；保留本地预约，必要时在官方页面处理",
+		},
 		"AUTH_EXPIRED": {
 			"message": "登录态过期",
 			"recoverable": True,
