@@ -1,9 +1,10 @@
 name: Update Contributors
 
 on:
+  # PR 合并后刷新（pull_request_target 保证 fork PR 合并时也拿得到写权限）
+  pull_request_target:
+    types: [closed]
   workflow_dispatch:
-  schedule:
-    - cron: "0 0 * * 0" # 每周日 00:00 UTC
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -11,6 +12,7 @@ concurrency:
 
 jobs:
   update-contributors:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -31,7 +33,7 @@ jobs:
         with:
           commit-message: "chore: 更新贡献者名单"
           title: "chore: update contributors"
-          body: "每周自动刷新 CONTRIBUTORS.svg(scripts/update_contributors.py)。"
+          body: "PR 合并后自动刷新 CONTRIBUTORS.svg(scripts/update_contributors.py)。"
           branch: chore/update-contributors
           add-paths: CONTRIBUTORS.svg
           delete-branch: true
