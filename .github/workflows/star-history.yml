@@ -1,0 +1,65 @@
+name: Star History
+
+on:
+  schedule:
+    - cron: "0 0 * * 0" # 每周日 00:00 UTC = 北京时间周一 08:00
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  star-history:
+    runs-on: ubuntu-latest
+    steps:
+      # 2026-07 起 stargazers 接口只对 admin/collaborator 开放，Actions 默认的 github.token
+      # 读不到星标时间线，必须使用 fine-grained PAT（Metadata: Read-only + Contents: Read and write）。
+      - name: 校验凭据
+        env:
+          STAR_HISTORY_TOKEN: ${{ secrets.STAR_HISTORY_TOKEN }}
+        run: |
+          if [ -z "$STAR_HISTORY_TOKEN" ]; then
+            echo "::error::缺少 STAR_HISTORY_TOKEN。请创建 fine-grained PAT（Metadata: Read-only、Contents: Read and write）后执行：gh secret set STAR_HISTORY_TOKEN --repo $GITHUB_REPOSITORY"
+            exit 1
+          fi
+
+      - name: 检出仓库
+        uses: actions/checkout@v7
+        with:
+          ref: master
+          token: ${{ secrets.STAR_HISTORY_TOKEN }}
+
+      # mystarhistory 没有 pip 包，且脚本需读取同目录的 handlee-subset.woff2（字体内嵌进 SVG），
+      # 所以整体克隆并 pin 到 v1；升级时改这里的 SHA 即可。
+      - name: 获取 mystarhistory (pinned v1)
+        run: |
+          git clone -q https://github.com/carsteneu/mystarhistory.git "$RUNNER_TEMP/mystarhistory"
+          git -C "$RUNNER_TEMP/mystarhistory" checkout -q ec82d645a6df185f4d845b33691a6bcdd02f608a
+
+      - name: 生成明/暗两版 SVG
+        env:
+          GH_TOKEN: ${{ secrets.STAR_HISTORY_TOKEN }}
+        run: |
+          python3 "$RUNNER_TEMP/mystarhistory/mystarhistory.py" \
+            --repo "$GITHUB_REPOSITORY" \
+            --output docs/assets/star-history.svg
+          python3 "$RUNNER_TEMP/mystarhistory/mystarhistory.py" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dark \
+            --output docs/assets/star-history-dark.svg
+
+      - name: 有变化则提交
+        run: |
+          if git diff --quiet -- docs/assets/star-history.svg docs/assets/star-history-dark.svg; then
+            echo "图表无变化，跳过提交"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/assets/star-history.svg docs/assets/star-history-dark.svg
+          git commit -m "docs: 刷新 Star History 快照"
+          git push
