@@ -1,7 +1,8 @@
 """Load API specs from YAML — single source of truth for endpoints, headers, and lookups."""
+
 import importlib.resources
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import yaml
@@ -13,6 +14,8 @@ class EndpointSpec:
 	method: str
 	url: str
 	referer: str
+	effect: Literal["read", "write", "unknown"] = "unknown"
+	replay_safe: bool = False
 
 
 @dataclass(frozen=True)
@@ -49,11 +52,19 @@ def _parse_api_spec(raw: dict[str, Any]) -> BossApiSpec:
 	for name, ep in raw.get("endpoints", {}).items():
 		url = _absolute_url(base_url, ep.get("url") or ep["path"])
 		referer = _absolute_url(base_url, ep.get("referer", "/"))
+		effect = ep.get("effect", "unknown")
+		if effect not in ("read", "write", "unknown"):
+			raise ValueError(f"invalid endpoint effect for {name}: {effect}")
+		replay_safe = ep.get("replay_safe", False) is True
+		if replay_safe and effect != "read":
+			raise ValueError(f"only explicit read endpoints may be replay_safe: {name}")
 		endpoints[name] = EndpointSpec(
 			name=name,
-			method=ep.get("method", "GET"),
+			method=ep.get("method", "GET").upper(),
 			url=url,
 			referer=referer,
+			effect=effect,
+			replay_safe=replay_safe,
 		)
 
 	web_pages = {k: _absolute_url(base_url, v) for k, v in raw.get("web_pages", {}).items()}
@@ -100,3 +111,14 @@ def get_recruiter_spec() -> BossApiSpec:
 	if _RECRUITER_SPEC is None:
 		_RECRUITER_SPEC = _parse_api_spec(_load_yaml("recruiter.yaml"))
 	return _RECRUITER_SPEC
+
+
+def endpoint_for_request(method: str, url: str) -> EndpointSpec | None:
+	"""Resolve declared operation semantics; an unknown GET is not a safe read."""
+	parsed = urlparse(url)
+	canonical_url = parsed._replace(query="", fragment="").geturl()
+	for spec in (get_spec(), get_recruiter_spec()):
+		for endpoint in spec.endpoints.values():
+			if endpoint.url == canonical_url and endpoint.method == method.upper():
+				return endpoint
+	return None

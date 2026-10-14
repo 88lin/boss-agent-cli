@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from boss_agent_cli.api.recruiter_endpoints import BASE_URL, BOSS_CHAT_START_URL, CODE_STOKEN_EXPIRED
+from boss_agent_cli.api.recruiter_endpoints import BASE_URL, BOSS_CHAT_START_URL, CODE_ACCOUNT_RESTRICTED, CODE_IP_RESTRICTED, CODE_STOKEN_EXPIRED
 from boss_agent_cli.api.zhipin_errors import classify_code_37, response_message
 from boss_agent_cli.platforms.recruiter_base import RecruiterPlatform
 
@@ -70,13 +70,17 @@ class BossRecruiterPlatform(RecruiterPlatform):
 			return greet_error
 		code = response.get("code")
 		message = response_message(response)
+		if code in (CODE_IP_RESTRICTED, str(CODE_IP_RESTRICTED)):
+			return "ENVIRONMENT_RISK", message
+		if code in (CODE_ACCOUNT_RESTRICTED, str(CODE_ACCOUNT_RESTRICTED), 35, "35", 36, "36"):
+			return "ACCOUNT_RISK", message
+		if code in (CODE_STOKEN_EXPIRED, str(CODE_STOKEN_EXPIRED)):
+			unified = "TOKEN_REFRESH_FAILED" if classify_code_37(response) == "token_expired" else "ENVIRONMENT_RISK"
+			return unified, message
 		# 客户端自己判定的结果状态（例如 ACTION_UNCONFIRMED）放在 CLI 内部命名空间字段里。
 		cli_code = response.get("__cli_error_code__")
 		if isinstance(cli_code, str) and cli_code:
 			return cli_code, message
-		if code == CODE_STOKEN_EXPIRED:
-			unified = "TOKEN_REFRESH_FAILED" if classify_code_37(response) == "token_expired" else "ENVIRONMENT_RISK"
-			return unified, message
 		unified = _ERROR_CODE_MAP.get(code, "UNKNOWN") if isinstance(code, int) else "UNKNOWN"
 		# 端点漂移场景下重映射 121：调用方（_browser_request / _request）在 response dict 注入
 		# __cli_endpoint_hint__ 字段（CLI 内部命名空间，避免与服务端字段冲突）。

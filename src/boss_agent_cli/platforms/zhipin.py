@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from boss_agent_cli.api.endpoints import BASE_URL, CODE_STOKEN_EXPIRED
+from boss_agent_cli.api.endpoints import BASE_URL, CODE_ACCOUNT_RESTRICTED, CODE_IP_RESTRICTED, CODE_STOKEN_EXPIRED
 from boss_agent_cli.api.zhipin_errors import classify_code_37, response_message
 from boss_agent_cli.platforms.base import Platform
 
@@ -45,9 +45,20 @@ class BossPlatform(Platform):
 		return response.get("zpData")
 
 	def parse_error(self, response: dict[str, Any]) -> tuple[str, str]:
-		if response.get("code") == CODE_STOKEN_EXPIRED:
+		if response.get("code") in (CODE_IP_RESTRICTED, str(CODE_IP_RESTRICTED)):
+			return "ENVIRONMENT_RISK", response_message(response)
+		if response.get("code") in (CODE_ACCOUNT_RESTRICTED, str(CODE_ACCOUNT_RESTRICTED), 35, "35", 36, "36"):
+			return "ACCOUNT_RISK", response_message(response)
+		if response.get("code") in (CODE_STOKEN_EXPIRED, str(CODE_STOKEN_EXPIRED)):
 			code = "TOKEN_REFRESH_FAILED" if classify_code_37(response) == "token_expired" else "ENVIRONMENT_RISK"
 			return code, response_message(response)
+		cli_code = response.get("__cli_error_code__")
+		if (
+			response.get("code") == -1
+			and isinstance(cli_code, str)
+			and cli_code in {"ACTION_UNCONFIRMED", "NETWORK_ERROR"}
+		):
+			return str(cli_code), response_message(response)
 		return self._classify_platform_error(response, _ERROR_CODE_MAP)
 
 	# ── P0 只读委托 ─────────────────────────────────────
@@ -104,7 +115,9 @@ class BossPlatform(Platform):
 	def chat_history(self, gid: str, security_id: str, page: int = 1, count: int = 20) -> dict[str, Any]:
 		return self._client.chat_history(gid, security_id, page=page, count=count)
 
-	def friend_label(self, friend_id: str, label_id: int, friend_source: int = 0, remove: bool = False) -> dict[str, Any]:
+	def friend_label(
+		self, friend_id: str, label_id: int, friend_source: int = 0, remove: bool = False
+	) -> dict[str, Any]:
 		return self._client.friend_label(friend_id, label_id, friend_source, remove=remove)
 
 	def exchange_contact(self, security_id: str, uid: str, friend_name: str, exchange_type: int = 1) -> dict[str, Any]:

@@ -40,11 +40,17 @@ In a TTY only `operator_actions` is rendered, to stderr; `next_actions` stays an
 | `boss` / `boss wizard` | Start the TTY wizard; use `--input-json` for agent workflows and `--status/--resume/--stop <run_id>` for persisted runs |
 | `boss schema` | Full tool self-description JSON (agents call this first) |
 | `boss platforms` | Local platform registry and capability status (no network; `--platform` filter, `--capability` reverse lookup, includes `capability_status_legend`) |
-| `boss login` | User-triggered login (Cookie / CDP / QR / browser fallback per platform); `--force` reuses no existing session: skips local Cookie extraction and, under CDP, clears the target platform cookies in the current context before a fresh QR login; refused while the CDP risk lock is active unless `--ignore-risk-lock` is passed (skips the check, keeps the lock) |
+| `boss login` | User-triggered login (Cookie / CDP / QR / browser fallback per platform); `--force` reuses no existing session: skips local Cookie extraction and, under CDP, clears the target platform cookies in the current context before a fresh QR login; refused while the local BOSS risk lock is active; `--ignore-risk-lock` remains accepted for compatibility and cannot bypass the lock |
 | `boss logout` | Log out |
 | `boss status` | Check login state (local-only by default; `--live` runs a low-frequency read-only probe) |
 | `boss doctor` | Diagnose environment, dependencies, credential integrity, and network; local-only by default, `--live-probe` opts into a read-only probe |
 | `boss me` | My info (profile / resume / expectations / application records) |
+
+BOSS codes `31` (IP/environment restriction) / `32` (account restriction) / `35` / `36`, environmental or ambiguous code `37`, HTTP 403 and official `403.html` access-restriction and `verify.html` / `security.html` pages stop requests and latch local state. Bounded refresh requires explicit credential expiry; a token name alone, or a security-verification requirement alongside expiry, cannot trigger refresh. The historical `cdp_risk_lock.json` file covers candidate and recruiter httpx, CDP, headless, chat actions, login, credential import, refresh and independent crawls using the same `data_dir`. Token or channel changes never clear it. `error.details.risk_lock` retains the original risk reason, available platform code and `explicit_resume_required`; account risks keep `ACCOUNT_RISK`, while historical environment locks keep `ENVIRONMENT_RISK_LOCKED`.
+
+After confirming recovery on the intended official business page in the original session, the user runs `boss clean --risk-lock` to remove the local block, then explicitly resumes the task. A working homepage does not prove the job or chat page has recovered. Local cleanup neither removes server restrictions nor verifies online recovery. `--dry-run` only previews cleanup; another risk immediately relatches the lock. Agents must not clear it on their own.
+
+A recovery time displayed by the restriction page is a platform hint, not a trigger for scheduled refresh or automatic unlocking. Mobile availability does not establish web recovery. With an existing restricted page, `login --force` also stops before clearing Cookies.
 
 ### Import a browser cURL session
 
@@ -70,6 +76,8 @@ This is an alternative credential input, not a login/risk-control bypass or a co
 | `boss show <#>` | Re-view a numbered result from the last search |
 | `boss cities` | 40 supported cities |
 
+`recommend` sets `pagination.has_more` to `true` or `false` only when the platform returns a boolean `hasMore`. A missing or ambiguous value produces `null` with `has_more_source=unknown` and no next-page action. Only `true` suggests another page; neither `false` nor `null` triggers an additional probe. The compatible `total` field remains the number of returned items, with `total_kind=returned_page_count`, rather than an overall job count.
+
 ## Resumable bulk crawl
 
 `crawl` is an explicitly triggered, bounded Chrome task. Install `uv sync --extra crawl` first; it starts only the isolated `<data-dir>/crawl/chrome-profile`, never attaches to a daily Chrome profile, checkpoints every stage, and applies fixed request/detail/time/retry budgets plus a stop control.
@@ -94,9 +102,9 @@ boss crawl stop <run_id>
 
 The default Hook is `none`. `screenshot-full` is enabled only when the user explicitly selects `--hook-profile screenshot-full --hook-dir <directory>`; the directory must be authorized by its user and include the original seven scripts plus `SHA256SUMS`. This project no longer redistributes those third-party scripts; each source file is SHA-256 verified before injection and only its identifier and digest are recorded. Cookies, headers, and full request bodies are not recorded.
 
-Candidate workflow: `boss agent crawl --run-id <run_id> --resume <resume-name>` runs “completed crawl → shortlist → ai fit → score ordering” without opening a browser. `boss agent crawl --query <query> --city <city> --resume <resume-name>` starts a new real Chrome crawl. On `risk_stopped` or `budget_stopped`, Agent returns the `run_id` and resume command instead of retrying indefinitely or recreating the session.
+Candidate workflow: `boss agent crawl --run-id <run_id> --resume <resume-name>` runs “completed crawl → shortlist → ai fit → score ordering” without opening a browser. `boss agent crawl --query <query> --city <city> --resume <resume-name>` starts a new real Chrome crawl. An existing risk lock in the same `data_dir` blocks run/start/resume and new agent crawls before browser construction, connection or background launch; resume restores its own checkpoint and cannot clear the lock. A new risk preserves the `risk_stopped` outcome, collected queue and checkpoint, with structured reason and available business code in `data.risk_lock` (`null` when unknown). Human recovery instructions appear only in `hints.operator_actions`, without an executable resume action. Local status/results/shortlist imports and completed-run reads remain available.
 
-After every page, `<data-dir>/crawl/runs/<run_id>/jobs.json`, `jobs.csv`, and a filtered/frozen `jobs.xlsx` are updated. XLSX keeps the complete values but every data row is a fixed-height single line, so long content is visually clipped rather than expanding the row. JSON/CSV/XLSX and `crawl results` omit `security_id`, job IDs, selectors, recruiter names, and recruiter titles by default; those remain in restricted local SQLite state, and `boss clean --privacy` deletes crawl runs, budgets, and exports. Codes `37` / `38`, a security page, a missing job-list container, an exhausted budget, or a stop request checkpoint and stop immediately; stdout remains a JSON envelope containing the resume command.
+After every page, `<data-dir>/crawl/runs/<run_id>/jobs.json`, `jobs.csv`, and a filtered/frozen `jobs.xlsx` are updated. XLSX keeps the complete values but every data row is a fixed-height single line, so long content is visually clipped rather than expanding the row. JSON/CSV/XLSX and `crawl results` omit `security_id`, job IDs, selectors, recruiter names, and recruiter titles by default; those remain in restricted local SQLite state, and `boss clean --privacy` deletes crawl runs, budgets, and exports. Risk codes `31` / `32` / `35` / `36` / `37`, the identity-profile flow indicated by code `38`, a security page, a missing job-list container, an exhausted budget, or a stop request checkpoint and stop immediately. Code `38` is not synonymous with a CAPTCHA. Stdout remains a JSON envelope containing the resume command.
 
 ## Candidate actions
 
@@ -128,6 +136,8 @@ After every page, `<data-dir>/crawl/runs/<run_id>/jobs.json`, `jobs.csv`, and a 
 | `boss favorites list/sync` | Read BOSS job favorites with validity status; sync imports only explicitly active jobs (deduplicates jobs, refreshes dynamic access IDs, preserves first-saved time) |
 | `boss preset add/list/remove` | Search presets |
 
+`boss shortlist add <sid> <jid> --lid <lid>` saves access context from the same list item as `sid`; `list` / `compare` return it, and crawl and favorites imports retain the matching context while favorites previews remain redacted. `lid` is optional. Storage does not establish current validity, a lifetime, or identity across accounts.
+
 ## Recruiter mode
 
 | Command | Description |
@@ -147,7 +157,15 @@ The `hr chat` list endpoint only returns basic conversation info (friendId, name
 
 `greet` only sends first contact. It does not open an MQTT connection or clear unread state. Success returns `sent=true`; if saving local state fails after sending, the error envelope preserves `error.details.sent=true`. Never resend because local bookkeeping failed. BOSS can return a quota-block page inside a `code=0` response; the CLI recognizes this business rejection and returns `GREET_LIMIT` with `error.details.sent=false` and a redacted platform message. The rejected candidate/job pair remains reserved to prevent retries. Platform limits may be per job and lower than a caller's configured daily budget. Unknown unread counts in `chat` / `last-messages` remain `null`, not zero.
 
-`request-resume` and `resume --exchange` drive the official chat-page components and only click a confirmation that appeared for this action. Success requires evidence: a known request text in a chat WebSocket frame, or a new request message when the chat history is read back after the action. If the page action ran but neither is found, the command returns `ACTION_UNCONFIRMED` (`recoverable=false`) with the page log, confirmation state and WebSocket counts in `error.details`. The action may already have taken effect, so check `boss hr chatmsg <friend_id>` first and do not retry blindly. When a phone or WeChat exchange also produces a resume request, the success result includes `side_effects: ["resume_request_detected"]`.
+`request-resume` and `resume --exchange` drive the official chat-page components and only click a confirmation that appeared for this action. Success requires a new message from you in the history read after the action, with a known request text or recognized action-card type. An outgoing WebSocket frame, a successful page call, or an unknown phone action ID alone cannot confirm sending; these cases return `ACTION_UNCONFIRMED` (`recoverable=false`) with the page log, confirmation state and WebSocket counts in `error.details`. The action may already have taken effect, so check `boss hr chatmsg <friend_id>` first and do not retry blindly. History evidence does not prove recipient delivery or read status. When a phone or WeChat exchange also produces a resume request, the success result includes `side_effects: ["resume_request_detected"]`. Risk before the action or during the first history read stops the flow without further polling. Disabled or loading editors are never forced open, and the target friend must match uniquely.
+
+### Automation stop and explicit recovery
+
+`boss agent stop --reason <reason>` persists an independent stop flag that an older business-state snapshot cannot overwrite. Recruiter automation reads stop state at action boundaries and saves each confirmed action's deduplication result immediately. Risk, normal timeouts and interrupts preserve the available checkpoint. Submitted actions without confirmation require checking the official page before any resubmission.
+
+After completing official verification in the same browser and account and checking the blocked page, the operator can explicitly resume with `boss --role recruiter agent run --resume`. This clears the local stop state while preserving confirmed actions and queues; it does not establish that platform risk is resolved. Ordinary `agent run` never unlocks it. The MCP `boss_agent_run` parameter `resume` defaults to `false` and requires an explicit operator instruction before setting it to `true`. Resumable wizard/crawl runs keep `--resume <run_id>` and `crawl resume <run_id>`; runs marked `stopped` by `wizard --stop` remain terminal, requiring another workflow or recovery of their internal task.
+
+Long MCP calls use asynchronous subprocesses so stop/status tools remain responsive. Cancellation or a deadline attempts graceful interruption and process cleanup. Forced termination can leave unknown side effects; never retry automatically when `error.details.outcome_unknown=true`. A wizard's normal timeout retains a resumable result; MCP waits for its requested timeout plus a checkpoint grace period.
 
 The platform only unlocks the phone/WeChat exchange buttons after the recruiter has sent a message in the conversation (resume requests are not affected). Before exchanging, the command checks whether the button component is disabled (`disabled` attribute, `aria-disabled`, `disabled`/`gray` classes, `pointer-events: none`, or a disabled flag in the component props/data). If the page gives no clear answer, it falls back to the complete chat history read before the action: no message from you means locked. When the button is definitely locked, the page exchange action is not invoked and the command returns `EXCHANGE_NOT_AVAILABLE` (`recoverable=true`); reply to the candidate first and retry. Ambiguous signals never block; the original flow runs.
 
@@ -186,7 +204,7 @@ Both commands reuse native CLI authentication. This implementation follows stati
 | Command | Description |
 |---------|-------------|
 | `boss config list/set/reset` | Configuration management |
-| `boss clean` | Clean caches |
+| `boss clean` | Clean caches; `--risk-lock` explicitly clears the local risk lock after the user confirms the intended official business page has recovered; `--dry-run` keeps the lock, and cleanup does not establish server recovery |
 | `boss stats` | Funnel stats from local state (greeted/applied/shortlist) |
 | `boss export <query>` | Export results (CSV/JSON/HTML, supports `--url` web filters) |
 

@@ -1,7 +1,7 @@
 """Shared hybrid HTTP client base for BOSS candidate/recruiter clients.
 
 `BossClient` and `BossRecruiterClient` share ~90% of their request plumbing:
-the httpx-channel retry loop (403/安全验证 refresh, stoken-expired refresh,
+	the httpx-channel retry loop (explicit stoken-expired refresh,
 rate-limit cooldown), lazy client/browser construction, and lifecycle.
 The per-platform differences (base URL / headers / referer map, auth-error
 class, response codes, whether to stamp `__cli_endpoint_hint__`) are exposed
@@ -24,10 +24,13 @@ from boss_agent_cli.api.httpx_helpers import (
 	merge_response_cookies,
 	referer_header,
 )
+from boss_agent_cli.api.endpoints_loader import endpoint_for_request
 from boss_agent_cli.api.throttle import RequestThrottle
+from boss_agent_cli.api.zhipin_errors import normalize_risk_code, platform_risk_page_response, raise_platform_risk_response
 
 if TYPE_CHECKING:
 	from boss_agent_cli.api.browser_client import BrowserSession
+	from boss_agent_cli.api.client import PlatformRiskError
 	from boss_agent_cli.auth.manager import AuthManager
 
 _MAX_RETRIES = 3
@@ -35,6 +38,7 @@ _MAX_RETRIES = 3
 
 class BrowserChannelRequired(RuntimeError):
 	"""CDP / 显式浏览器来源下，该操作只有 httpx 实现，拒绝用 httpx 携带浏览器凭据发送。"""
+
 
 _SelfT = TypeVar("_SelfT", bound="_BaseHttpClient")
 
@@ -70,6 +74,7 @@ class _BaseHttpClient:
 		# 任何模式布尔——见 api/browser_source.py 的模块文档。
 		self._browser_source = browser_source
 		self._closed = False
+		self._unpersisted_risk_lock: Any = None
 		self._register()
 
 	# ── Registry hooks (subclass keeps its own module-level WeakSet) ──
@@ -129,53 +134,79 @@ class _BaseHttpClient:
 			)
 		return self._browser_request(method, url, params=params, data=data)
 
-	# ── CDP code 37 lock ─────────────────────────────────────────────
+	# ── Local platform risk latch (historical CDP file/protocol) ─────
 
 	def _risk_lock_dir(self) -> Path | None:
-		data_dir = getattr(getattr(self, "_auth", None), "data_dir", None)
+		auth = getattr(self, "_auth", None)
+		platform = getattr(auth, "_platform", "zhipin")
+		if isinstance(platform, str) and platform != "zhipin":
+			return None
+		data_dir = getattr(auth, "data_dir", None)
 		if isinstance(data_dir, Path):
 			return data_dir
 		if isinstance(data_dir, str) and data_dir:
 			return Path(data_dir)
 		return None
 
-	def _check_cdp_risk_lock(self, browser: Any) -> None:
-		"""有 code 37 锁时，发请求前核对 Chrome 当前 stoken 摘要；没变就拒绝发送。"""
+	def _check_cdp_risk_lock(self, browser: Any = None) -> None:
+		"""仅查本地锁，不读 Cookie、不连接浏览器；摘要变化或换通道不能恢复。"""
+		from boss_agent_cli.api import cdp_risk_lock
+		from boss_agent_cli.api.client import PlatformRiskError
+
+		data_dir = self._risk_lock_dir()
+		lock = cdp_risk_lock.read_lock(data_dir) if data_dir is not None else None
+		lock = lock or getattr(self, "_unpersisted_risk_lock", None)
+		if lock is not None:
+			raise PlatformRiskError.from_lock(lock)
+
+	def _record_cdp_risk_lock(self, browser: Any = None, *, error: "PlatformRiskError | None" = None) -> None:
+		"""记录任一传输通道的风险；摘要只作诊断，写盘失败仍锁存当前实例。"""
 		from boss_agent_cli.api import cdp_risk_lock
 
 		data_dir = self._risk_lock_dir()
+		platform = getattr(getattr(self, "_auth", None), "_platform", "zhipin")
+		if isinstance(platform, str) and platform != "zhipin":
+			return
+		read_hash = getattr(browser, "current_stoken_hash", None)
+		try:
+			current = read_hash() if callable(read_hash) else None
+		except Exception:
+			current = None
+		reason = "ACCOUNT_RISK" if error is not None and error.code == "ACCOUNT_RISK" else "ENVIRONMENT_RISK"
+		details = error.details if error is not None else {}
+		prior_lock = details.get("risk_lock", {})
+		raw_code = details.get("platform_code", prior_lock.get("platform_code") if isinstance(prior_lock, dict) else None) if error is not None else 37
+		platform_code = normalize_risk_code(raw_code)
+		lock = cdp_risk_lock.RiskLock(
+			stoken_sha256=current if isinstance(current, str) else None, locked_at=time.time(),
+			cdp_url=getattr(self, "_cdp_url", None), reason=reason, platform_code=platform_code,
+		)
+		self._unpersisted_risk_lock = lock
 		if data_dir is None:
 			return
-		lock = cdp_risk_lock.read_lock(data_dir)
-		if lock is None:
-			return
-		ensure_started = getattr(browser, "ensure_started", None)
-		if callable(ensure_started):
-			ensure_started()
-		if getattr(browser, "_is_cdp", False) is not True:
-			# 锁针对的是 CDP Chrome 里的 stoken；headless 会话不受影响，也不解锁。
-			return
-		read_hash = getattr(browser, "current_stoken_hash", None)
-		current = read_hash() if callable(read_hash) else None
-		if lock.matches(current):
-			from boss_agent_cli.api.client import EnvironmentRiskLockedError
-
-			raise EnvironmentRiskLockedError.from_lock(lock)
-		cdp_risk_lock.clear_lock(data_dir)
-
-	def _record_cdp_risk_lock(self, browser: Any) -> None:
-		"""CDP 浏览器请求命中环境类 code 37：记下当前 stoken 的摘要（不存原值）。"""
-		from boss_agent_cli.api import cdp_risk_lock
-
-		data_dir = self._risk_lock_dir()
-		if data_dir is None or getattr(browser, "_is_cdp", False) is not True:
-			return
-		read_hash = getattr(browser, "current_stoken_hash", None)
-		current = read_hash() if callable(read_hash) else None
 		try:
-			cdp_risk_lock.write_lock(data_dir, current if isinstance(current, str) else None, cdp_url=self._cdp_url)
+			cdp_risk_lock.write_lock(
+				data_dir, lock.stoken_sha256, cdp_url=lock.cdp_url, now=lock.locked_at,
+				reason=lock.reason, platform_code=lock.platform_code,
+			)
+			self._unpersisted_risk_lock = None
 		except OSError:
 			pass
+		if error is not None:
+			error.details["risk_lock"] = {
+				"locked": True, "reason": lock.reason, "platform_code": lock.platform_code,
+				"explicit_resume_required": True, "persisted": self._unpersisted_risk_lock is None,
+			}
+
+	def _raise_platform_risk_response(self, response: dict[str, Any], *, browser: Any = None) -> None:
+		from boss_agent_cli.api.client import PlatformRiskError
+
+		try:
+			raise_platform_risk_response(response, is_cdp=getattr(browser, "_is_cdp", False) is True)
+		except PlatformRiskError as error:
+			error.details["platform_code"] = response.get("__cli_platform_code__", int(response["code"]))
+			self._record_cdp_risk_lock(browser, error=error)
+			raise
 
 	def _cdp_http_url(self) -> str:
 		from boss_agent_cli.api.browser_urls import DEFAULT_CDP_URL
@@ -183,42 +214,15 @@ class _BaseHttpClient:
 		return getattr(self, "_cdp_url", None) or DEFAULT_CDP_URL
 
 	def _check_cdp_risk_lock_raw(self) -> None:
-		"""聊天页动作（裸 CDP、不附着 patchright）前的锁检查：经 ``Storage.getCookies`` 读 stoken 摘要。
+		"""裸 CDP 动作也仅检查本地锁，不为核对摘要建立任何连接。"""
+		self._check_cdp_risk_lock()
 
-		与 ``_check_cdp_risk_lock`` 同一契约：摘要没变（或读不到）就拒绝，变了就解锁。
-		"""
-		from boss_agent_cli.api import cdp_risk_lock
-
-		data_dir = self._risk_lock_dir()
-		if data_dir is None:
-			return
-		lock = cdp_risk_lock.read_lock(data_dir)
-		if lock is None:
-			return
-		from boss_agent_cli.api.browser_client import read_cdp_stoken_hash
-
-		if lock.matches(read_cdp_stoken_hash(self._cdp_http_url())):
-			from boss_agent_cli.api.client import EnvironmentRiskLockedError
-
-			raise EnvironmentRiskLockedError.from_lock(lock)
-		cdp_risk_lock.clear_lock(data_dir)
-
-	def _record_cdp_risk_lock_raw(self) -> None:
-		"""聊天页动作期间页面请求命中环境类 code 37：经裸 CDP 读摘要后记锁（不存原值）。"""
-		from boss_agent_cli.api import cdp_risk_lock
-		from boss_agent_cli.api.browser_client import read_cdp_stoken_hash
-
-		data_dir = self._risk_lock_dir()
-		if data_dir is None:
-			return
-		try:
-			cdp_risk_lock.write_lock(
-				data_dir, read_cdp_stoken_hash(self._cdp_http_url()), cdp_url=getattr(self, "_cdp_url", None),
-			)
-		except OSError:
-			pass
+	def _record_cdp_risk_lock_raw(self, *, error: "PlatformRiskError | None" = None) -> None:
+		"""页面风险后直接记锁，不追加连接或 Cookie 读取。"""
+		self._record_cdp_risk_lock(error=error)
 
 	def _get_client(self) -> httpx.Client:
+		self._check_cdp_risk_lock()
 		if self.is_browser_only():
 			# 兜底闸门：任何漏网的 httpx 路径在 CDP 模式下都不能带着浏览器凭据发出去。
 			raise BrowserChannelRequired(
@@ -245,6 +249,7 @@ class _BaseHttpClient:
 		sources closes the previous session first, so the client never keeps the
 		parallel auto/existing-browser slots that #410 removed.
 		"""
+		self._check_cdp_risk_lock()
 		from boss_agent_cli.api.browser_source import resolve_policy
 
 		policy = resolve_policy(self._browser_source if browser_source is None else browser_source)
@@ -285,12 +290,15 @@ class _BaseHttpClient:
 
 	def _request(self, method: str, url: str, *, retry: bool = True, **kwargs: Any) -> dict[str, Any]:
 		"""httpx 请求，循环重试（最多 _MAX_RETRIES 次）。"""
+		self._check_cdp_risk_lock()
 		# extra_headers overrides yaml-driven defaults from _headers_for(url); candidate
 		# client never passes it, so the pop is a no-op there (behavior preserved).
 		if self.is_browser_only():
 			return self._request_via_browser(method, url, **kwargs)
 		extra_headers_override: dict[str, str] = kwargs.pop("extra_headers", {})
-		max_retries = _MAX_RETRIES if retry else 0
+		operation = endpoint_for_request(method, url)
+		write_possible = operation is None or operation.effect != "read"
+		max_retries = _MAX_RETRIES if retry and operation is not None and operation.replay_safe else 0
 		for attempt in range(max_retries + 1):
 			client = self._get_client()
 			token = self._auth.get_token()
@@ -301,27 +309,63 @@ class _BaseHttpClient:
 			self._throttle.wait()
 
 			headers = {**self._headers_for(url), **extra_headers_override}
-			resp = client.request(method, url, headers=headers, **kwargs)
+			try:
+				resp = client.request(method, url, headers=headers, **kwargs)
+			except Exception as error:
+				from boss_agent_cli.api.client import PlatformRiskError
+
+				if isinstance(error, PlatformRiskError):
+					self._record_cdp_risk_lock(error=error)
+					raise
+				if not isinstance(error, httpx.TransportError) or not write_possible:
+					raise
+				return self._unconfirmed_http_response(url, "transport_error")
 			self._throttle.mark()
 			self._merge_cookies(resp)
 
-			# 403 或安全验证 → 刷新 token 重试
-			if resp.status_code == 403 or "安全验证" in resp.text:
-				if attempt >= max_retries:
-					message = (
-						"Token 刷新后仍被拒绝，请重新登录"
-						if retry
-						else "请求被拒绝；为避免重复写入未自动重试，请检查登录态"
-					)
-					raise self._AUTH_ERROR_CLS(message)
-				backoff = (2**attempt) + random.uniform(0.5, 1.5)
-				time.sleep(backoff)
-				self._auth.force_refresh(cdp_url=self._cdp_url, browser_source=self._browser_source)
-				self._client = None
-				continue
+			# HTTP 状态和“安全验证”文案不能先覆盖风险业务码，更不能触发自动换登录通道。
+			try:
+				payload = resp.json()
+			except ValueError:
+				payload = None
+			data = payload if isinstance(payload, dict) else None
+			from boss_agent_cli.api.client import AccountRiskError, PlatformRiskError
 
-			resp.raise_for_status()
-			data = resp.json()
+			if data is not None:
+				self._raise_platform_risk_response(data)
+			try:
+				try:
+					final_url = str(resp.url)
+				except (AttributeError, RuntimeError):
+					final_url = ""
+				response_headers = getattr(resp, "headers", {})
+				page_risk = platform_risk_page_response(
+					url=final_url,
+					content_type=str(response_headers.get("content-type", "")),
+					body=resp.text,
+				)
+				if page_risk is not None:
+					raise_platform_risk_response(page_risk)
+				if resp.status_code == 403:
+					raise AccountRiskError(
+						"平台拒绝访问 (HTTP 403)，未自动刷新或重试；请在官方页面核实当前会话",
+						details={"platform_code": None, "http_status": 403},
+					)
+			except PlatformRiskError as error:
+				self._record_cdp_risk_lock(error=error)
+				raise
+			if resp.status_code == 401:
+				return {"code": 401, "message": "平台认证已失效，请重新登录", "zpData": {}}
+			try:
+				resp.raise_for_status()
+			except httpx.HTTPStatusError:
+				if not write_possible:
+					raise
+				return self._unconfirmed_http_response(url, "http_status_error")
+			if data is None:
+				if write_possible:
+					return self._unconfirmed_http_response(url, "invalid_response")
+				raise ValueError("平台响应不是 JSON 对象")
 			code = data.get("code")
 
 			# stoken 过期 → 刷新重试（BOSS 客户端按语境分类，语义不明不刷新）
@@ -343,6 +387,19 @@ class _BaseHttpClient:
 			return cast("dict[str, Any]", data)
 
 		raise self._AUTH_ERROR_CLS("请求失败，已达最大重试次数")
+
+	def _unconfirmed_http_response(self, url: str, reason: str) -> dict[str, Any]:
+		"""响应断裂不能证明未发生副作用；只返回脱敏原因，不暴露原请求参数。"""
+		response: dict[str, Any] = {
+			"code": -1,
+			"message": "请求结果未确认；操作可能已生效，请先核对平台实际记录，勿直接重试",
+			"zpData": {},
+			"__cli_error_code__": "ACTION_UNCONFIRMED",
+			"__cli_error_details__": {"outcome": "unknown", "replay_safe": False, "reason": reason},
+		}
+		if self._ADD_ENDPOINT_HINT:
+			response["__cli_endpoint_hint__"] = url
+		return response
 
 	# ── Lifecycle ────────────────────────────────────────────────────
 

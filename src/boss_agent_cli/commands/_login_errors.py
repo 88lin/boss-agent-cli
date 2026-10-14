@@ -50,6 +50,7 @@ def classify_login_error(exc: Exception, ctx: click.Context) -> dict[str, object
 			"recoverable": False,
 			"recovery_action": recovery,
 			"hints": hints or None,
+			"details": exc.details or None,
 		}
 
 	if isinstance(exc, ValueError):

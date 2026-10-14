@@ -9,6 +9,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
+from boss_agent_cli.api import cdp_risk_lock
+from boss_agent_cli.api.client import PlatformRiskError
+from boss_agent_cli.api.zhipin_errors import normalize_risk_code
 from boss_agent_cli.cache.store import CacheStore
 from boss_agent_cli.crawler.exporter import write_run_outputs
 from boss_agent_cli.crawler.hooks import (
@@ -100,9 +103,10 @@ class CrawlOutcome:
 	detail_requests_attempted: int = 0
 	elapsed_seconds: int = 0
 	error: str = ""
+	risk_lock: dict[str, Any] | None = None
 
 	def as_dict(self) -> dict[str, Any]:
-		return {
+		result = {
 			"run_id": self.run_id, "status": self.status, "next_page": self.next_page,
 			"pages_completed": self.pages_completed, "jobs_seen": self.jobs_seen, "detail_checks": self.detail_checks,
 			"checkpoint": {"next_page": self.next_page, "resume_command": f"boss crawl resume {self.run_id}"},
@@ -113,6 +117,9 @@ class CrawlOutcome:
 			"hooks": [{"name": item.name, "success": item.success, "sha256": item.sha256, "reason": item.reason} for item in self.hooks],
 			"error": self.error,
 		}
+		if self.risk_lock is not None:
+			result["risk_lock"] = self.risk_lock
+		return result
 
 
 class CrawlBudget:
@@ -216,6 +223,7 @@ class CrawlService:
 		self._budget_factory = budget_factory
 		self._control_probe = control_probe
 		self._on_run_created = on_run_created
+		self._unpersisted_risk_lock: cdp_risk_lock.RiskLock | None = None
 
 	def create_and_run(self, settings: CrawlSettings) -> CrawlOutcome:
 		self._validate_settings(settings)
@@ -229,6 +237,7 @@ class CrawlService:
 
 	def create(self, settings: CrawlSettings) -> str:
 		"""Persist a new task so another process may run or resume it."""
+		self._check_risk_lock()
 		self._validate_settings(settings)
 		require_capability_mode(settings.operating_mode, "crawl")
 		require_capability_mode(settings.operating_mode, "crawl-cdp")
@@ -269,6 +278,7 @@ class CrawlService:
 		needs_more_pages = not bool(run["list_finished"]) and pages is not None and pages >= int(run["next_page"])
 		if run["status"] == "completed" and not (needs_more_pages or (with_detail and pending_details)):
 			return self._completed_outcome(run)
+		self._check_risk_lock()
 		self._cache.update_crawl_run_params(run_id, settings.as_dict())
 		if clear_stop:
 			self._cache.clear_crawl_stop_request(run_id)
@@ -302,6 +312,7 @@ class CrawlService:
 		output_dir: Path,
 		list_finished: bool = False,
 	) -> CrawlOutcome:
+		self._check_risk_lock()
 		transport = self._transport_factory(settings)
 		budget = self._budget_factory(self._cache)
 		previous = self._cache.get_crawl_run(run_id)
@@ -323,6 +334,7 @@ class CrawlService:
 		detail_checks = 0
 		status = "completed"
 		error = ""
+		risk_lock: dict[str, Any] | None = None
 		current_page = next_page
 		# 风控/待人工处理时保留采集 Chrome，便于用户在窗口内登录或过验证。
 		keep_browser = False
@@ -379,6 +391,12 @@ class CrawlService:
 			status = "risk_stopped"
 			error = str(exc)
 			keep_browser = True
+			risk_lock = self._record_risk_lock(exc)
+		except PlatformRiskError as exc:
+			status = "risk_stopped"
+			error = str(exc)
+			keep_browser = True
+			risk_lock = exc.details.get("risk_lock")
 		except CrawlLimitExceeded as exc:
 			status = "budget_stopped"
 			error = str(exc)
@@ -426,7 +444,28 @@ class CrawlService:
 			requests_attempted=run_budget.requests_attempted,
 			detail_requests_attempted=run_budget.detail_requests_attempted,
 			elapsed_seconds=run_budget.elapsed_seconds,
+			risk_lock=risk_lock,
 		)
+
+	def _check_risk_lock(self) -> None:
+		if self._unpersisted_risk_lock is not None:
+			raise PlatformRiskError.from_lock(self._unpersisted_risk_lock)
+		cdp_risk_lock.raise_if_locked(self._data_dir)
+
+	def _record_risk_lock(self, error: CrawlRiskError) -> dict[str, Any]:
+		lock = cdp_risk_lock.RiskLock(
+			stoken_sha256=None, locked_at=time.time(), reason=error.reason, platform_code=error.platform_code,
+		)
+		persisted = True
+		try:
+			lock = cdp_risk_lock.write_lock(
+				self._data_dir, None, now=lock.locked_at, reason=lock.reason, platform_code=lock.platform_code,
+			)
+			self._unpersisted_risk_lock = None
+		except OSError:
+			self._unpersisted_risk_lock = lock
+			persisted = False
+		return {**PlatformRiskError.from_lock(lock).details["risk_lock"], "persisted": persisted}
 
 	def _complete_pending_details(
 		self,
@@ -472,7 +511,7 @@ class CrawlService:
 		for _ in range(max_retries + 1):
 			try:
 				return action()
-			except (CrawlRiskError, CrawlLimitExceeded, CrawlStopRequested):
+			except (PlatformRiskError, CrawlRiskError, CrawlLimitExceeded, CrawlStopRequested):
 				raise
 			except Exception as exc:
 				last_error = exc
@@ -489,13 +528,14 @@ class CrawlService:
 		settings: CrawlSettings,
 		page_no: int,
 	) -> dict[str, Any]:
+		self._raise_if_stop_requested(run_id)
 		budget.wait("list")
 		self._raise_if_stop_requested(run_id)
 		run_budget.claim_request("list")
 		payload = transport.fetch_page(settings.query, settings.city_code, page_no)
 		self._raise_if_stop_requested(run_id)
-		if payload.get("code") in (37, 38):
-			raise CrawlRiskError(f"第 {page_no} 页平台返回风险码 code={payload.get('code')}: {payload.get('message', '')}")
+		if normalize_risk_code(payload.get("code")) is not None:
+			raise CrawlRiskError.from_response(payload)
 		if payload.get("code") not in (None, 0):
 			raise RuntimeError(f"第 {page_no} 页接口错误 code={payload.get('code')}: {payload.get('message', '')}")
 		return payload
@@ -508,18 +548,20 @@ class CrawlService:
 		run_budget: CrawlRunBudget,
 		security_id: str,
 	) -> dict[str, Any]:
+		self._raise_if_stop_requested(run_id)
 		budget.wait("detail")
 		self._raise_if_stop_requested(run_id)
 		run_budget.claim_request("detail")
 		payload = transport.fetch_detail(security_id)
 		self._raise_if_stop_requested(run_id)
-		if payload.get("code") in (37, 38):
-			raise CrawlRiskError(f"职位详情接口返回风险码 code={payload.get('code')}: {payload.get('message', '')}")
+		if normalize_risk_code(payload.get("code")) is not None:
+			raise CrawlRiskError.from_response(payload)
 		if payload.get("code") not in (None, 0):
 			raise RuntimeError(f"职位详情接口错误 code={payload.get('code')}: {payload.get('message', '')}")
 		return payload
 
 	def _raise_if_stop_requested(self, run_id: str) -> None:
+		self._check_risk_lock()
 		if self._control_probe is not None:
 			signal = self._control_probe()
 			if signal == "timeout":
@@ -553,6 +595,7 @@ def _normalize_job(raw: dict[str, Any], query: str, page_no: int, rank: int) -> 
 	benefits = raw.get("welfareList", [])
 	return job_key, {
 		"query": query, "page": page_no, "rank": rank, "job_id": job_id, "security_id": security_id,
+		"lid": str(raw.get("lid") or ""),
 		"title": raw.get("jobName", ""), "salary": raw.get("salaryDesc", ""), "city": raw.get("cityName", ""),
 		"district": raw.get("areaDistrict", ""), "business_district": raw.get("businessDistrict", ""),
 		"company": raw.get("brandName", ""), "company_scale": raw.get("brandScaleName", ""),

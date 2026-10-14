@@ -7,6 +7,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Literal, cast
 
+from boss_agent_cli.services.job_identity import deduplicate_job_result
+
 _SEARCH_TTL = 86400  # 24 hours
 _MAX_SEARCH_CACHE = 100
 
@@ -74,6 +76,7 @@ class CacheStore:
 				source TEXT NOT NULL,
 				tags TEXT DEFAULT '',
 				note TEXT DEFAULT '',
+				lid TEXT NOT NULL DEFAULT '',
 				created_at REAL NOT NULL,
 				PRIMARY KEY (security_id, job_id)
 			);
@@ -176,6 +179,9 @@ class CacheStore:
 			self._conn.execute("ALTER TABLE shortlist_records ADD COLUMN tags TEXT DEFAULT ''")
 		if "note" not in columns:
 			self._conn.execute("ALTER TABLE shortlist_records ADD COLUMN note TEXT DEFAULT ''")
+		if "lid" not in columns:
+			# 未记录的访问上下文保持未知；不按 job_id 合并或替换历史记录。
+			self._conn.execute("ALTER TABLE shortlist_records ADD COLUMN lid TEXT NOT NULL DEFAULT ''")
 		self._conn.commit()
 
 	def _migrate_crawl_runs(self) -> None:
@@ -470,11 +476,14 @@ class CacheStore:
 		current_step: str | None,
 		last_result: dict[str, Any] | None = None,
 		error: dict[str, Any] | None = None,
+		preserve_stopped: bool = False,
 	) -> bool:
 		cursor = self._conn.execute(
-			"UPDATE workflow_runs SET status = ?, current_step = ?, last_result = ?, error = ?, updated_at = ? "
+			"UPDATE workflow_runs SET status = CASE WHEN ? AND status = 'stopped' THEN status ELSE ? END, "
+			"current_step = ?, last_result = ?, error = ?, updated_at = ? "
 			"WHERE run_id = ?",
 			(
+				preserve_stopped,
 				status,
 				current_step,
 				json.dumps(last_result, ensure_ascii=False, sort_keys=True) if last_result is not None else None,
@@ -736,6 +745,8 @@ class CacheStore:
 		return hashlib.sha256(raw.encode()).hexdigest()
 
 	def record_watch_results(self, search_name: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+		# 只去重本轮完整列表项；旧记录保留访问上下文复合键，未验证账号前不跨轮按 job_id 合并。
+		items = deduplicate_job_result(items)
 		now = time.time()
 		new_items = []
 		seen_count = 0
@@ -788,20 +799,31 @@ class CacheStore:
 		return row is not None
 
 	def add_shortlist(self, item: dict[str, Any]) -> None:
+		security_id = str(item.get("security_id") or "")
+		job_id = str(item.get("job_id") or "")
+		source = str(item.get("source") or "")
+		lid_value = item.get("lid")
+		lid = lid_value if isinstance(lid_value, str) else ""
+		if not lid:
+			lid = self._crawl_shortlist_lid(security_id, job_id, source)
 		self._conn.execute(
 			"INSERT OR REPLACE INTO shortlist_records "
-			"(security_id, job_id, title, company, city, salary, source, tags, note, created_at) "
-			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"(security_id, job_id, title, company, city, salary, source, tags, note, lid, created_at) "
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, "
+			"COALESCE(NULLIF(?, ''), (SELECT lid FROM shortlist_records WHERE security_id = ? AND job_id = ?), ''), ?)",
 			(
-				item.get("security_id", ""),
-				item.get("job_id", ""),
+				security_id,
+				job_id,
 				item.get("title", ""),
 				item.get("company", ""),
 				item.get("city", ""),
 				item.get("salary", ""),
-				item.get("source", ""),
+				source,
 				self._serialize_shortlist_tags(item.get("tags", [])),
 				item.get("note", ""),
+				lid,
+				security_id,
+				job_id,
 				time.time(),
 			),
 		)
@@ -810,9 +832,10 @@ class CacheStore:
 	def add_shortlist_batch(self, items: list[dict[str, Any]], source: str = "favorites") -> dict[str, int]:
 		"""批量导入候选池：按 job_id 去重，刷新 favorites 访问 ID，缺主键则跳过。
 
-		securityId 每次请求重新生成（实测 C3：同职位两次请求 sid 全不同），不能作去重键；
-		encryptJobId（job_id）跨请求稳定，故按 job_id 去重。已有 favorites 记录会刷新
-		security_id，但保留用户标签、备注、来源和 created_at；其他来源记录保持不变。
+		保留既有按 job_id 去重兼容行为（实测 C3 的两次同职位请求 sid 不同）；
+		此历史逻辑尚无已验证的账号/角色作用域，不能据此建立跨账号身份。
+		已有同来源记录刷新 security_id 与同一输入的 lid，但保留用户标签、备注、来源
+		和 created_at；其他来源记录保持不变，不推断访问上下文有效期。
 		`with self._conn:` 上下文保证中途异常自动回滚（deferred 隔离下避免部分批次
 		被下一次 commit 连带提交）。返回 {imported_count, existing_count, skipped_count}。
 		"""
@@ -830,6 +853,8 @@ class CacheStore:
 			for item in items:
 				security_id = str(item.get("security_id") or "")
 				job_id = str(item.get("job_id") or "")
+				lid_value = item.get("lid")
+				lid = lid_value if isinstance(lid_value, str) else ""
 				if not security_id or not job_id:
 					skipped_count += 1
 					continue
@@ -837,17 +862,23 @@ class CacheStore:
 					old_security_id, old_source = existing_by_job_id[job_id]
 					if old_source == source and old_security_id != security_id:
 						self._conn.execute(
-							"UPDATE shortlist_records SET security_id = ? "
+							# 原兼容刷新保留；动态上下文必须来自同一条输入，缺 lid 时不能拼上旧 lid。
+							"UPDATE shortlist_records SET security_id = ?, lid = ? "
 							"WHERE security_id = ? AND job_id = ?",
-							(security_id, old_security_id, job_id),
+							(security_id, lid, old_security_id, job_id),
 						)
 						existing_by_job_id[job_id] = (security_id, old_source)
+					elif old_source == source and old_security_id == security_id and lid:
+						self._conn.execute(
+							"UPDATE shortlist_records SET lid = ? WHERE security_id = ? AND job_id = ?",
+							(lid, security_id, job_id),
+						)
 					existing_count += 1
 					continue
 				cursor = self._conn.execute(
 					"INSERT OR IGNORE INTO shortlist_records "
-					"(security_id, job_id, title, company, city, salary, source, tags, note, created_at) "
-					"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					"(security_id, job_id, title, company, city, salary, source, tags, note, lid, created_at) "
+					"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 					(
 						security_id,
 						job_id,
@@ -858,6 +889,7 @@ class CacheStore:
 						item.get("source") or source,
 						self._serialize_shortlist_tags(item.get("tags", [])),
 						str(item.get("note", "") or ""),
+						lid,
 						time.time(),
 					),
 				)
@@ -874,7 +906,7 @@ class CacheStore:
 
 	def list_shortlist(self) -> list[dict[str, Any]]:
 		rows = self._conn.execute(
-			"SELECT security_id, job_id, title, company, city, salary, source, tags, note, created_at "
+			"SELECT security_id, job_id, title, company, city, salary, source, tags, note, created_at, lid "
 			"FROM shortlist_records ORDER BY created_at DESC"
 		).fetchall()
 		return [
@@ -889,9 +921,31 @@ class CacheStore:
 				"tags": self._deserialize_shortlist_tags(row[7]),
 				"note": row[8] or "",
 				"created_at": row[9],
+				"lid": row[10] or self._crawl_shortlist_lid(str(row[0] or ""), str(row[1] or ""), str(row[6] or "")),
 			}
 			for row in rows
 		]
+
+	def _crawl_shortlist_lid(self, security_id: str, job_id: str, source: str) -> str:
+		"""复用同一 crawl 记录的上下文；不推断其他来源的 lid。"""
+		if not source.startswith("crawl:") or not job_id or not security_id:
+			return ""
+		run_id = source.removeprefix("crawl:")
+		if not run_id:
+			return ""
+		try:
+			item = self.get_crawl_job(run_id, job_id)
+		except (ValueError, TypeError):
+			return ""
+		if item is None:
+			return ""
+		payload = item.get("payload")
+		if not isinstance(payload, dict):
+			return ""
+		if str(payload.get("job_id") or "") != job_id or str(payload.get("security_id") or "") != security_id:
+			return ""
+		lid = payload.get("lid")
+		return lid if isinstance(lid, str) else ""
 
 	def set_shortlist_tags(self, security_id: str, job_id: str, tags: list[str]) -> bool:
 		cursor = self._conn.execute(

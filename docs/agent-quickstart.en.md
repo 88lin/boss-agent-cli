@@ -76,7 +76,7 @@ In the CLI, `boss agent crawl --run-id <run_id> --resume <resume-name>` consumes
 boss agent crawl --query "AI engineer" --city 杭州 --pages 3 --with-detail --resume <resume-name>
 ```
 
-Hooks are disabled by default. Only when you have authorization may you explicitly pass `--hook-profile screenshot-full --hook-dir <directory containing SHA256SUMS>`; this project does not redistribute third-party scripts. To halt a task, run `boss crawl stop <run_id>`. When `crawl_status` reports `risk_stopped` or `budget_stopped`, do not recreate the task or retry in a loop. Keep the `run_id`; after handling the page, run `boss crawl resume <run_id>`.
+Hooks are disabled by default. Only when you have authorization may you explicitly pass `--hook-profile screenshot-full --hook-dir <directory containing SHA256SUMS>`; this project does not redistribute third-party scripts. To halt a task, run `boss crawl stop <run_id>`. On `risk_stopped`, the shared lock in the same `data_dir` blocks new crawls and resumes before browser construction. Keep the `run_id`; the user must confirm recovery on the intended official business page, run `boss clean --risk-lock`, and explicitly run `boss crawl resume <run_id>`. Recovery belongs in `operator_actions`; agents must not clear the lock. Handle the budget before resuming `budget_stopped`; neither state permits recreating tasks or retrying in a loop. Local status/results/imports remain available.
 
 ### Recruiter workflow
 
@@ -112,21 +112,27 @@ boss status
 
 Common recovery actions:
 - `AUTH_REQUIRED` / `AUTH_EXPIRED` / `TOKEN_REFRESH_FAILED`: run `boss login` again
-- `ENVIRONMENT_RISK`: stop automated access; keep the current dedicated profile, confirm on the official page, and reduce access frequency
-- `ENVIRONMENT_RISK_LOCKED`: the CDP Chrome's stoken is still the one that hit code 37, so nothing was sent; stop automation and ask the user to open a job list page in that Chrome, confirm it loads, and wait a few minutes before retrying — do not run `boss clean --risk-lock` on your own
+- `ACCOUNT_RISK` / `ENVIRONMENT_RISK`: stop automated access and latch local state; codes `31` (IP/environment restriction) / `32` (account restriction) / `35` / `36`, environmental or ambiguous code `37`, HTTP 403 and official `403.html` access-restriction and `verify.html` / `security.html` pages all stop the workflow. `error.details.risk_lock` retains the original reason, available platform code and `explicit_resume_required`
+- `ENVIRONMENT_RISK_LOCKED`: the historical environment lock has not been explicitly cleared, so nothing was sent. Token changes, switching httpx / headless / CDP channels and `login --ignore-risk-lock` cannot bypass it. The user must confirm the intended official business page has recovered in the original session, run `boss clean --risk-lock`, and explicitly resume the task. A working homepage does not prove the target page has recovered; local cleanup does not prove server recovery; another risk immediately relatches the lock. Agents must not clear it on their own
+- The restriction page's recovery time is a platform hint; do not refresh or unlock automatically. Mobile availability cannot replace acceptance on the intended web page
+- Code `37` permits bounded refresh only when credential semantics and explicit expiry or session-expiration semantics appear together. A bare token name, invalid-token wording or a security-verification requirement stops the workflow; security and environmental-risk wording takes precedence over expiry wording
 - `wt2` present but `stoken` missing: treat it as partial auth; start Chrome with a CDP debugging port and run `boss login --cdp`, or run `boss login` again
-- `RATE_LIMITED`: wait and retry
+- `RATE_LIMITED`: declared replay-safe reads can use bounded cooldowns; verify write outcomes first
 - `NOT_SUPPORTED`: switch to a platform or workflow goal reported as available by schema
-- `WORKFLOW_TIMEOUT`: retain the `run_id`, adjust the timeout, and run `boss wizard --resume <run_id>`
+- `WORKFLOW_TIMEOUT`: a normal wizard timeout retains its `run_id`; adjust the deadline and explicitly run `boss wizard --resume <run_id>`. If MCP reports `outcome_unknown=true`, verify unconfirmed actions before retrying
 - `INVALID_PARAM`: correct the input parameters, such as city, welfare filters, or page number
 
 ## 4) Export tool protocols
+
+Ordinary `agent run` never clears recruiter automation stop state. After official verification in the original browser and checks of the blocked page and any unconfirmed actions, the operator can explicitly run `boss --role recruiter agent run --resume`. The MCP parameter `boss_agent_run.resume=true` requires the same explicit recovery instruction. Confirmed action deduplication records are retained.
 
 ```bash
 boss schema --format openai-tools
 boss schema --format anthropic-tools
 boss schema --format mcp-tools
 ```
+
+All three tool formats use the shared runtime catalog of 77 MCP tools, with matching names and input parameters. Native schema continues to describe the CLI's 39 top-level commands.
 
 Further reading:
 - [Agent Host Examples](agent-hosts.en.md)

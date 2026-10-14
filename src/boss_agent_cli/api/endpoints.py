@@ -46,6 +46,8 @@ QR_DISPATCHER_URL = _url("qr_dispatcher")
 
 # ── API response codes ──────────────────────────────────────────────
 CODE_SUCCESS = _spec.response_codes.get("success", 0)
+CODE_IP_RESTRICTED = _spec.response_codes.get("ip_restricted", 31)
+CODE_ACCOUNT_RESTRICTED = _spec.response_codes.get("account_restricted", 32)
 CODE_STOKEN_EXPIRED = _spec.response_codes.get("stoken_expired", 37)
 CODE_RATE_LIMITED = _spec.response_codes.get("rate_limited", 9)
 CODE_ACCOUNT_RISK = _spec.response_codes.get("account_risk", 36)

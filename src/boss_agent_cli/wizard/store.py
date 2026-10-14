@@ -55,7 +55,9 @@ class WorkflowStore:
 		return self._cache
 
 	def update_run(self, run_id: str, **kwargs: Any) -> bool:
-		return self._cache.update_workflow_run(run_id, **kwargs)
+		# Keep stop requests atomic with respect to worker result updates. A
+		# confirmed step may still be committed, but cannot restart this run.
+		return self._cache.update_workflow_run(run_id, preserve_stopped=True, **kwargs)
 
 	def update_step(self, run_id: str, step_name: str, **kwargs: Any) -> bool:
 		return self._cache.update_workflow_step(run_id, step_name, **kwargs)

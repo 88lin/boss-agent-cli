@@ -21,6 +21,8 @@ default_headers:
 
 response_codes:
   success: 0
+  ip_restricted: 31
+  account_restricted: 32
   stoken_expired: 37
   rate_limited: 9
   account_risk: 36
@@ -28,94 +30,140 @@ response_codes:
 endpoints:
   search:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zpgeek/search/joblist.json"
     referer: "/web/geek/job"
   recommend:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zpgeek/pc/recommend/job/list.json"
     referer: "/web/geek/recommend"
   detail:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zpgeek/job/detail.json"
     referer: "/web/geek/job"
   greet:
     method: POST
+    effect: write
+    replay_safe: false
     path: "/wapi/zpgeek/friend/add.json"
     referer: "/web/geek/chat"
   job_card:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zpgeek/job/card.json"
     referer: "/web/geek/job"
   user_info:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zpuser/wap/getUserInfo.json"
     referer: "/"
   resume_baseinfo:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zpgeek/resume/baseinfo/query.json"
     referer: "/web/geek/resume"
   resume_expect:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zpgeek/resume/expect/query.json"
     referer: "/web/geek/resume"
   deliver_list:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zprelation/resume/geekDeliverList"
     referer: "/web/geek/chat"
   friend_list:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zprelation/friend/getGeekFriendList.json"
     referer: "/web/geek/chat"
   interview_data:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zpinterview/geek/interview/data.json"
     referer: "/web/geek/job"
   job_history:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zpgeek/history/joblist.json"
     referer: "/web/geek/job"
   chat_history:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zpchat/geek/historyMsg"
     referer: "/web/geek/chat"
   friend_label_add:
     method: GET
+    effect: write
+    replay_safe: false
     path: "/wapi/zprelation/friend/label/addMark"
     referer: "/web/geek/chat"
   friend_label_delete:
     method: GET
+    effect: write
+    replay_safe: false
     path: "/wapi/zprelation/friend/label/deleteMark"
     referer: "/web/geek/chat"
   exchange_request:
     method: POST
+    effect: write
+    replay_safe: false
     path: "/wapi/zpchat/exchange/request"
     referer: "/web/geek/chat"
   resume_status:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zpgeek/resume/status.json"
     referer: "/web/geek/resume"
   geek_get_job:
     method: GET
+    effect: read
+    replay_safe: true
     path: "/wapi/zprelation/interaction/geekGetJob"
     referer: "/web/geek/chat"
   qr_randkey:
     method: GET
+    effect: write
+    replay_safe: false
     path: "/wapi/zppassport/captcha/randkey"
     referer: "/web/user/"
   qr_getqrcode:
     method: GET
+    effect: write
+    replay_safe: false
     path: "/wapi/zpweixin/qrcode/getqrcode"
     referer: "/web/user/"
   qr_scan:
     method: GET
+    effect: unknown
+    replay_safe: false
     path: "/wapi/zppassport/qrcode/scan"
     referer: "/web/user/"
   qr_scanlogin:
     method: GET
+    effect: write
+    replay_safe: false
     path: "/wapi/zppassport/qrcode/scanLogin"
     referer: "/web/user/"
   qr_dispatcher:
     method: GET
+    effect: write
+    replay_safe: false
     path: "/wapi/zppassport/qrcode/dispatcher"
     referer: "/web/user/"
 

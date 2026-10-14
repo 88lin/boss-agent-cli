@@ -4,7 +4,7 @@ from typing import Any
 from boss_agent_cli.api import endpoints
 from boss_agent_cli.api._base_client import _BaseHttpClient
 from boss_agent_cli.api.httpx_helpers import make_client_registry
-from boss_agent_cli.api.zhipin_errors import classify_code_37, response_message
+from boss_agent_cli.api.zhipin_errors import classify_code_37
 
 # atexit safeguard: close any BossClient instances not explicitly closed
 _OPEN_CLIENTS, _close_open_clients = make_client_registry()
@@ -27,53 +27,54 @@ class PlatformRiskError(Exception):
 
 	code: str = "ACCOUNT_RISK"
 
-	def __init__(self, message: str = "", is_cdp: bool = False):
+	def __init__(self, message: str = "", is_cdp: bool = False, *, details: dict[str, Any] | None = None):
 		self.is_cdp = is_cdp
+		self.details = details or {}
 		super().__init__(message)
+
+	@staticmethod
+	def from_lock(lock: Any) -> "PlatformRiskError":
+		"""本地阻断保留原始账号/环境风险；旧环境锁继续使用历史错误码。"""
+		from boss_agent_cli.api.cdp_risk_lock import UNLOCK_OPERATOR_ACTIONS
+
+		reason = getattr(lock, "reason", "ENVIRONMENT_RISK")
+		platform_code = getattr(lock, "platform_code", 37)
+		cause = "身份资料流程" if platform_code == 38 else "IP/访问环境限制" if platform_code == 31 else "账号访问限制" if platform_code == 32 else "账号风险" if reason == "ACCOUNT_RISK" else "访问环境风险"
+		if platform_code is not None:
+			cause += f" (code {platform_code})"
+		if getattr(lock, "corrupt", False):
+			cause = "本地风控锁文件无法解析"
+		steps = "；".join(UNLOCK_OPERATOR_ACTIONS)
+		error_cls = AccountRiskError if reason == "ACCOUNT_RISK" else EnvironmentRiskLockedError
+		return error_cls(
+			f"BOSS 直聘此前命中{cause}，本地风控锁尚未显式解除，本次请求未发送。{steps}。",
+			is_cdp=bool(getattr(lock, "cdp_url", None)),
+			details={"risk_lock": {
+				"locked": True, "reason": reason, "platform_code": platform_code,
+				"explicit_resume_required": True, "corrupt": bool(getattr(lock, "corrupt", False)),
+			}},
+		)
 
 
 class AccountRiskError(PlatformRiskError):
-	"""BOSS 直聘风控拦截（code 36）：检测到异常行为。"""
+	"""BOSS 直聘账号侧需人工处理的拦截（code 32/35/36、安全页或身份资料流程）。"""
 
 	code = "ACCOUNT_RISK"
 
 
 class EnvironmentRiskError(PlatformRiskError):
-	"""BOSS 直聘访问环境风控（code 37），不等同于登录过期。"""
+	"""BOSS 直聘访问环境/IP 风控（code 31/37），不等同于登录过期。"""
 
 	code = "ENVIRONMENT_RISK"
 
 
 class EnvironmentRiskLockedError(EnvironmentRiskError):
-	"""CDP Chrome 的 stoken 已吃过 code 37 且尚未更新：本地拒绝发送，不触网。
+	"""环境风险锁尚未由用户显式解除：任何传输通道均在本地拒绝发送。
 
 	继承 ``EnvironmentRiskError``，所有按风控终止的执行器无需改动即可停下。
 	"""
 
 	code = "ENVIRONMENT_RISK_LOCKED"
-
-	@classmethod
-	def from_lock(cls, lock: Any) -> "EnvironmentRiskLockedError":
-		from boss_agent_cli.api.cdp_risk_lock import UNLOCK_OPERATOR_ACTIONS
-
-		since = ""
-		locked_at = getattr(lock, "locked_at", 0) or 0
-		if locked_at > 0:
-			import time
-
-			since = f"（{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(locked_at))} 起）"
-		if getattr(lock, "corrupt", False):
-			reason = "本地风控锁文件无法解析"
-		elif getattr(lock, "stoken_sha256", None) is None:
-			reason = "上次命中 code 37 时未能读取 Chrome 的 stoken"
-		else:
-			reason = "Chrome 里的 __zp_stoken__ 仍是被拦截的那一个"
-		steps = "；".join(UNLOCK_OPERATOR_ACTIONS)
-		return cls(
-			f"CDP 浏览器此前命中访问环境风控 (code 37){since}，{reason}，本次请求未发送。{steps}。",
-			is_cdp=True,
-		)
-
 
 #: 风控错误码 → 异常类。平台 adapter 的 ``parse_error`` 走响应字典路径时返回的是码，
 #: 执行器用这张表把码升格为异常，与浏览器通道抛出的异常形态走同一条终止分支。
@@ -116,30 +117,14 @@ class BossClient(_BaseHttpClient):
 	) -> dict[str, Any]:
 		# 单次请求，不重试：浏览器通道的 stoken 由页面 JS 生成，force_refresh 拿不到新凭证，
 		# 重试只是对已被风控拦截的高风险端点再打一次（见 docs/research/platforms/zhipin.md 红线）。
+		self._check_cdp_risk_lock()
 		browser = self._get_browser(browser_source=browser_source)
-		# CDP Chrome 的 stoken 此前吃过 code 37 且没换新：本地拒绝，不再发出去。
-		self._check_cdp_risk_lock(browser)
-		result = browser.request(method, url, params=params, data=data)
-		code = result.get("code")
-		is_cdp = getattr(browser, "_is_cdp", False)
-		mode = "CDP" if is_cdp else "headless patchright"
-		if code == endpoints.CODE_ACCOUNT_RISK:
-			msg = response_message(result) or "账户存在异常行为"
-			raise AccountRiskError(
-				f"BOSS 直聘风控拦截 (code {code}): {msg}。"
-				f"当前浏览器模式: {mode}。"
-				f"建议：停止自动化访问并回到 BOSS 直聘官方页面手动处理。",
-				is_cdp=is_cdp,
-			)
-		if code == endpoints.CODE_STOKEN_EXPIRED and classify_code_37(result) == "environment_risk":
-			self._record_cdp_risk_lock(browser)
-			msg = response_message(result) or "未知 code 37 响应"
-			raise EnvironmentRiskError(
-				f"BOSS 直聘访问环境风控 (code {code}): {msg}。"
-				f"当前浏览器模式: {mode}。已停止且未刷新或重试；"
-				"请保留当前专用 profile，在官方页面确认后降低访问频率。",
-				is_cdp=is_cdp,
-			)
+		try:
+			result = browser.request(method, url, params=params, data=data)
+		except PlatformRiskError as exc:
+			self._record_cdp_risk_lock(browser, error=exc)
+			raise
+		self._raise_platform_risk_response(result, browser=browser)
 		return result
 
 	def _read_request(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:

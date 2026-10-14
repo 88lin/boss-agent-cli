@@ -1,3 +1,4 @@
+from contextlib import suppress
 import logging
 import os
 import sys
@@ -73,7 +74,7 @@ class ReusedSessionStaleError(RuntimeError):
 
 _PROBE_TIMEOUT_MS = 10000  # 复用登录态只读探测的 fetch 超时（毫秒），JS 侧 AbortController 兜底
 
-_PROBE_SCRIPT = """
+_PROBE_SCRIPT = r"""
 async ({url, timeoutMs}) => {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -87,7 +88,26 @@ async ({url, timeoutMs}) => {
 				'X-Requested-With': 'XMLHttpRequest',
 			},
 		});
-		return await resp.json();
+		const body = await resp.text();
+		const contentType = resp.headers.get('content-type') || '';
+		const isHtml = contentType.includes('html') || /^\s*(?:<!doctype html|<html)/i.test(body);
+		const isHtmlRestricted = isHtml && (/<title\b[^>]*>\s*访问受限\s*<\/title\s*>/i.test(body)
+			|| (/<h[1-3]\b[^>]*>\s*访问受限\s*<\/h[1-3]\s*>/i.test(body)
+				&& /异常行为|违规访问|暂时被禁止访问/.test(body)));
+		const isHtmlVerification = isHtml && /<title[^>]*>[^<]*(安全验证|安全校验|风险验证)/i.test(body);
+		// Pass classification metadata only: never return an IP, recovery time or raw HTML.
+		const metadata = {
+			__auth_response_url__: resp.url || '', __auth_response_status__: resp.status,
+			__auth_response_content_type__: isHtml ? 'text/html' : contentType,
+			__auth_response_body__: isHtmlRestricted ? '<title>访问受限</title>'
+				: isHtmlVerification ? '<title>安全验证</title>' : '',
+		};
+		let data;
+		try { data = JSON.parse(body); } catch (_) { data = null; }
+		if (data && typeof data === 'object' && !Array.isArray(data)) {
+			return {...data, ...metadata};
+		}
+		return {code: -1, message: '复用会话探测响应不是 JSON 对象', ...metadata};
 	} catch (e) {
 		return {code: -1, message: String((e && e.message) || e)};
 	} finally {
@@ -95,6 +115,15 @@ async ({url, timeoutMs}) => {
 	}
 }
 """
+
+
+def _raise_if_security_page(page: Any, *, is_cdp: bool = False) -> None:
+	from boss_agent_cli.api.zhipin_errors import platform_risk_page_response, raise_platform_risk_response
+
+	url = getattr(page, "url", "")
+	page_risk = platform_risk_page_response(url=url) if isinstance(url, str) else None
+	if page_risk is not None:
+		raise_platform_risk_response(page_risk, is_cdp=is_cdp)
 
 
 def _probe_reused_session(page: Any, *, platform: str) -> str:
@@ -112,27 +141,36 @@ def _probe_reused_session(page: Any, *, platform: str) -> str:
 	if platform != "zhipin":
 		return "unverified"
 	from boss_agent_cli.api import endpoints
-	from boss_agent_cli.api.client import AccountRiskError, EnvironmentRiskError
-	from boss_agent_cli.api.zhipin_errors import classify_code_37, response_message
+	from boss_agent_cli.api.client import PlatformRiskError
+	from boss_agent_cli.api.zhipin_errors import platform_risk_page_response, raise_platform_risk_response
 
+	_raise_if_security_page(page, is_cdp=True)
 	try:
 		data = page.evaluate(_PROBE_SCRIPT, {"url": endpoints.USER_INFO_URL, "timeoutMs": _PROBE_TIMEOUT_MS})
+	except PlatformRiskError:
+		raise
 	except Exception as exc:  # evaluate 本身失败（页面被关等）：无法验证，不阻断
 		_logger.debug("复用登录态探测 evaluate 失败: %s", exc)
 		return "unverified"
 	if not isinstance(data, dict):
 		return "unverified"
+	raise_platform_risk_response(data, is_cdp=True)
+	page_risk = platform_risk_page_response(
+		url=str(data.get("__auth_response_url__") or ""),
+		content_type=str(data.get("__auth_response_content_type__") or ""),
+		body=str(data.get("__auth_response_body__") or ""),
+	)
+	if page_risk is not None:
+		raise_platform_risk_response(page_risk, is_cdp=True)
+	if data.get("__auth_security_page__") is True or data.get("__auth_response_status__") == 403:
+		from boss_agent_cli.api.client import AccountRiskError
+
+		raise AccountRiskError("复用会话探测遇到平台安全验证", is_cdp=True, details={"platform_code": None})
 	code = data.get("code")
 	if code == endpoints.CODE_SUCCESS:
 		return "valid"
 	if code == -1:
 		return "unverified"
-	if code == endpoints.CODE_ACCOUNT_RISK:
-		raise AccountRiskError(f"BOSS 直聘风控拦截 (code 36): {response_message(data)}", is_cdp=True)
-	if code == endpoints.CODE_STOKEN_EXPIRED:
-		if classify_code_37(data) == "environment_risk":
-			raise EnvironmentRiskError(f"BOSS 直聘访问环境风控 (code 37): {response_message(data)}", is_cdp=True)
-		return "stale"
 	return "stale"
 
 
@@ -154,11 +192,7 @@ def _clear_platform_cookies(context: Any, *, cookie_domain: str) -> None:
 
 def _matching_cookies(context: Any, *, cookie_domain: str) -> list[dict[str, Any]]:
 	try:
-		return [
-			cookie
-			for cookie in context.cookies()
-			if _is_cookie_domain(cookie.get("domain", ""), cookie_domain)
-		]
+		return [cookie for cookie in context.cookies() if _is_cookie_domain(cookie.get("domain", ""), cookie_domain)]
 	except Exception:
 		return []
 
@@ -212,23 +246,28 @@ def _safe_user_agent(page: Any) -> str:
 		return ""
 
 
-def _warm_home_for_runtime(page: Any, home_url: str, *, stage: str) -> bool:
+def _warm_home_for_runtime(page: Any, home_url: str, *, stage: str, is_cdp: bool = False) -> bool:
 	"""预热首页运行时；返回首页是否成功进入 domcontentloaded。
 
 	networkidle 只尽力等待，不作为必须条件。返回 False 表示首页导航
 	超时/失败、页面仍处于未完成导航状态——此时调用方必须避免对其执行
 	evaluate（patchright 会因执行上下文无法建立而永久挂起）。
 
-	首页在自动化下偶发进入风控验证页或加载缓慢导致 goto 超时；超时后
-	先跳 about:blank 终止卡住的导航，再重试一次。
+	普通导航超时可有界重试；已进入安全验证页立即抛风险，不清掉页面再请求。
 	"""
+	from boss_agent_cli.api.client import PlatformRiskError
+
 	loaded = False
 	for attempt in range(_HOME_NAV_RETRIES):
 		try:
 			page.goto(home_url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+			_raise_if_security_page(page, is_cdp=is_cdp)
 			loaded = True
 			break
+		except PlatformRiskError:
+			raise
 		except Exception as e:
+			_raise_if_security_page(page, is_cdp=is_cdp)
 			_browser_diag(f"[boss] {stage}：首页导航未在预期时间完成（{e}），重试 {attempt + 1}/{_HOME_NAV_RETRIES}...")
 			try:
 				page.goto("about:blank", wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
@@ -239,6 +278,7 @@ def _warm_home_for_runtime(page: Any, home_url: str, *, stage: str) -> bool:
 	except Exception as e:
 		# Expected on zhipin (long-polling). Do not dump to TTY for normal users.
 		_browser_diag(f"[boss] {stage}：首页未进入 networkidle（{e}），继续提取凭证")
+	_raise_if_security_page(page, is_cdp=is_cdp)
 	return loaded
 
 
@@ -285,6 +325,14 @@ def login_via_cdp(
 	browser = pw.chromium.connect_over_cdp(ws_url)
 	# 跨所有 browser context 搜索已有登录态：命中则复用该 context，不导航登录页
 	all_contexts = list(browser.contexts)
+	try:
+		for existing_context in all_contexts:
+			for existing_page in existing_context.pages:
+				_raise_if_security_page(existing_page, is_cdp=True)
+	except Exception:
+		with suppress(Exception):
+			pw.stop()
+		raise
 	if reuse_existing:
 		logged_in_ctx, ctx_index, ctx_account_fp = _find_logged_in_context(
 			all_contexts,
@@ -306,6 +354,7 @@ def login_via_cdp(
 		page = ctx.new_page()
 
 	try:
+		_raise_if_security_page(page, is_cdp=True)
 		if already_logged_in:
 			# 多 context 账号歧义：复用的是「第一个带登录态的 context」，选中哪个取决于
 			# browser.contexts 顺序，用户看不到也控制不了。打出 context 序号 + 账号指纹
@@ -331,16 +380,16 @@ def login_via_cdp(
 				)
 			except Exception:
 				pass
+			_raise_if_security_page(page, is_cdp=True)
 
 			print(f"[boss] 请在 Chrome 中扫码登录，等待中...（超时 {timeout}s）", file=sys.stderr)
 
 			for i in range(timeout):
 				time.sleep(1)
+				_raise_if_security_page(page, is_cdp=True)
 				# 裸 ctx.cookies() 让异常传播：轮询中途 CDP target 死掉时立即报真实连接错误，
 				# 而不是被吞成 [] 继续空转到超时，误报成「扫码超时」（与最终读取同一规则）。
-				cookies = [
-					c for c in ctx.cookies() if _is_cookie_domain(c.get("domain", ""), cookie_domain)
-				]
+				cookies = [c for c in ctx.cookies() if _is_cookie_domain(c.get("domain", ""), cookie_domain)]
 				if any(c.get("name") == success_cookie and c.get("value") for c in cookies):
 					print("[boss] 检测到登录成功！", file=sys.stderr)
 					break
@@ -363,10 +412,10 @@ def login_via_cdp(
 			# 容忍 UA 为空、不挂起。
 			page_ready = _ensure_page_evaluable(page)
 			ua = _safe_user_agent(page) if page_ready else ""
-			home_loaded = _warm_home_for_runtime(page, home_url, stage="登录后回到首页")
+			home_loaded = _warm_home_for_runtime(page, home_url, stage="登录后回到首页", is_cdp=True)
 		elif created_page:
 			# 复用登录态但无既有平台页签：新建页签回平台 home
-			home_loaded = _warm_home_for_runtime(page, home_url, stage="复用登录态回首页")
+			home_loaded = _warm_home_for_runtime(page, home_url, stage="复用登录态回首页", is_cdp=True)
 			page_ready = home_loaded
 			ua = _safe_user_agent(page) if home_loaded else ""
 		else:
@@ -374,6 +423,7 @@ def login_via_cdp(
 			home_loaded = False
 			page_ready = _ensure_page_evaluable(page)
 			ua = _safe_user_agent(page) if page_ready else ""
+		_raise_if_security_page(page, is_cdp=True)
 
 		if already_logged_in:
 			# 复用只证明 cookie 存在，不证明服务端仍认：wt2 已失效但仍在 jar 里时，
@@ -381,9 +431,7 @@ def login_via_cdp(
 			probe_ready = home_loaded if created_page else page_ready
 			status = _probe_reused_session(page, platform=platform) if probe_ready else "unverified"
 			if status == "stale":
-				raise ReusedSessionStaleError(
-					"复用的登录态已在服务端失效（只读探测返回未登录），不落盘；改为重新登录"
-				)
+				raise ReusedSessionStaleError("复用的登录态已在服务端失效（只读探测返回未登录），不落盘；改为重新登录")
 			if status == "unverified":
 				print(
 					"[boss] 提示：未能在线验证复用的登录态（页面未就绪或探测失败）；"
@@ -398,14 +446,10 @@ def login_via_cdp(
 		# []，会被当作 cookies={} 的「成功」结果落盘（AuthManager.login 不校验主 cookie）。
 		# 故直接 ctx.cookies() 让异常传播，并读完后校验主 cookie 存在，否则 raise。
 		all_cookies = {
-			c["name"]: c["value"]
-			for c in ctx.cookies()
-			if _is_cookie_domain(c.get("domain", ""), cookie_domain)
+			c["name"]: c["value"] for c in ctx.cookies() if _is_cookie_domain(c.get("domain", ""), cookie_domain)
 		}
 		if not all_cookies.get(success_cookie):
-			raise RuntimeError(
-				f"登录态校验失败：最终读取未拿到主 cookie（{success_cookie}），凭证不落盘"
-			)
+			raise RuntimeError(f"登录态校验失败：最终读取未拿到主 cookie（{success_cookie}），凭证不落盘")
 		if platform == "zhipin":
 			if created_page:
 				# 首页成功加载才对其 evaluate 提取 stoken；否则回退读取 cookie jar
@@ -419,10 +463,10 @@ def login_via_cdp(
 			stoken = ""
 		return {"cookies": all_cookies, "stoken": stoken, "user_agent": ua}
 	finally:
-		try:
-			if created_page:
+		if created_page:
+			with suppress(Exception):
 				page.close()
-		finally:
+		with suppress(Exception):
 			pw.stop()
 
 
@@ -432,77 +476,127 @@ def login_via_browser(*, timeout: int = 120, platform: str = "zhipin") -> dict[s
 	双重检测登录成功：监听 API 响应 + 轮询 wt2 cookie。
 	"""
 	config = _get_platform_config(platform)
+	from boss_agent_cli.api.client import AccountRiskError, PlatformRiskError
+	from boss_agent_cli.api.zhipin_errors import platform_risk_page_response, raise_platform_risk_response
 	login_page_url = config["login_page_url"]
 	home_url = config["home_url"]
 	cookie_domain = config["cookie_domain"]
 	success_cookie = config["success_cookie"]
 	with sync_playwright() as p:
 		browser = p.chromium.launch(headless=False)
-		context = browser.new_context(
-			viewport={"width": 1280, "height": 800},
-			locale="zh-CN",
-			timezone_id="Asia/Shanghai",
-		)
-		page = context.new_page()
+		try:
+			context = browser.new_context(
+				viewport={"width": 1280, "height": 800},
+				locale="zh-CN",
+				timezone_id="Asia/Shanghai",
+			)
+			page = context.new_page()
 
-		page.goto(login_page_url, wait_until="domcontentloaded")
-		print("已打开 BOSS 直聘登录页。", file=sys.stderr)
-		print(f"请扫码或手机号登录（超时 {timeout} 秒）...", file=sys.stderr)
-
-		# 双重检测：API 响应 或 wt2 cookie 出现，任一触发即认为登录成功
-		login_detected = False
-
-		def _on_response(response: Any) -> None:
-			nonlocal login_detected
-			url = response.url
-			if (
-				url.startswith("https://www.zhipin.com/wapi/zppassport/qrcode/loginConfirm")
-				or url.startswith("https://www.zhipin.com/wapi/zppassport/qrcode/dispatcher")
-				or url.startswith("https://www.zhipin.com/wapi/zppassport/login/phoneV2")
-			):
-				login_detected = True
-
-		page.on("response", _on_response)
-
-		deadline = time.time() + timeout
-		while time.time() < deadline and not login_detected:
-			# 也通过 cookie 检测（覆盖 API 匹配不上的情况）
 			try:
-				cookies_list = context.cookies()
-				if any(
-					c["name"] == success_cookie and _is_cookie_domain(c.get("domain", ""), cookie_domain)
-					for c in cookies_list
+				page.goto(login_page_url, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+			except Exception:
+				_raise_if_security_page(page)
+				raise
+			_raise_if_security_page(page)
+			print("已打开 BOSS 直聘登录页。", file=sys.stderr)
+			print(f"请扫码或手机号登录（超时 {timeout} 秒）...", file=sys.stderr)
+
+			# 双重检测：API 响应 或 wt2 cookie 出现，任一触发即认为登录成功
+			login_detected = False
+			response_risk: PlatformRiskError | None = None
+
+			def _on_response(response: Any) -> None:
+				nonlocal login_detected, response_risk
+				if response_risk is not None:
+					return
+				url = response.url
+				if not isinstance(url, str) or not is_zhipin_url(url):
+					return
+				try:
+					body = ""
+					if "/wapi/" in url:
+						try:
+							payload = response.json()
+						except Exception:
+							payload = None
+						if isinstance(payload, dict):
+							raise_platform_risk_response(payload)
+						elif payload is None:
+							try:
+								body = response.text()
+							except Exception:
+								pass
+					headers = getattr(response, "headers", {})
+					content_type = headers.get("content-type", "") if isinstance(headers, dict) else ""
+					page_risk = platform_risk_page_response(url=url, content_type=content_type, body=body if isinstance(body, str) else "")
+					if page_risk is not None:
+						raise_platform_risk_response(page_risk)
+					if response.status == 403:
+						raise AccountRiskError("浏览器登录遇到平台访问限制，已停止", details={"platform_code": None})
+				except PlatformRiskError as exc:
+					response_risk = exc
+					return
+				if (
+					url.startswith("https://www.zhipin.com/wapi/zppassport/qrcode/loginConfirm")
+					or url.startswith("https://www.zhipin.com/wapi/zppassport/qrcode/dispatcher")
+					or url.startswith("https://www.zhipin.com/wapi/zppassport/login/phoneV2")
 				):
 					login_detected = True
-					break
-			except Exception:
-				pass
-			time.sleep(1)
 
-		if not login_detected:
-			browser.close()
-			raise TimeoutError(f"扫码登录超时（{timeout}秒）")
+			page.on("response", _on_response)
 
-		print("检测到登录成功，正在提取凭证...", file=sys.stderr)
-		time.sleep(_POST_LOGIN_WAIT)
+			deadline = time.time() + timeout
+			while time.time() < deadline and not login_detected:
+				if response_risk is not None:
+					raise response_risk
+				_raise_if_security_page(page)
+				# 也通过 cookie 检测（覆盖 API 匹配不上的情况）
+				try:
+					cookies_list = context.cookies()
+					if any(
+						c["name"] == success_cookie and _is_cookie_domain(c.get("domain", ""), cookie_domain)
+						for c in cookies_list
+					):
+						login_detected = True
+						break
+				except Exception:
+					pass
+				time.sleep(1)
 
-		# UA 在已加载的登录页上记录（此时 evaluate 安全）；之后再预热首页
-		user_agent = _safe_user_agent(page)
+			if response_risk is not None:
+				raise response_risk
+			if not login_detected:
+				raise TimeoutError(f"扫码登录超时（{timeout}秒）")
 
-		# 跳转主站提取完整 cookies 和 stoken
-		home_loaded = _warm_home_for_runtime(page, home_url, stage="登录后回到首页")
+			_raise_if_security_page(page)
+			print("检测到登录成功，正在提取凭证...", file=sys.stderr)
+			time.sleep(_POST_LOGIN_WAIT)
+			if response_risk is not None:
+				raise response_risk
+			_raise_if_security_page(page)
 
-		cookies_list = context.cookies()
-		cookies = {
-			c["name"]: c["value"] for c in cookies_list if _is_cookie_domain(c.get("domain", ""), cookie_domain)
-		}
-		if platform == "zhipin":
-			# 首页成功加载才对其 evaluate 提取 stoken；否则回退到 cookie jar，
-			# 避免页面卡在导航中导致 page.evaluate 永久挂起
-			stoken = _extract_stoken(page) if home_loaded else cookies.get("__zp_stoken__", "")
-		else:
-			stoken = ""
-		browser.close()
+			# UA 在已加载的登录页上记录（此时 evaluate 安全）；之后再预热首页
+			user_agent = _safe_user_agent(page)
+
+			# 跳转主站提取完整 cookies 和 stoken
+			home_loaded = _warm_home_for_runtime(page, home_url, stage="登录后回到首页")
+			if response_risk is not None:
+				raise response_risk
+
+			cookies_list = context.cookies()
+			cookies = {
+				c["name"]: c["value"] for c in cookies_list if _is_cookie_domain(c.get("domain", ""), cookie_domain)
+			}
+			if platform == "zhipin":
+				# 首页成功加载才对其 evaluate 提取 stoken；否则回退到 cookie jar，
+				# 避免页面卡在导航中导致 page.evaluate 永久挂起
+				stoken = _extract_stoken(page) if home_loaded else cookies.get("__zp_stoken__", "")
+			else:
+				stoken = ""
+
+		finally:
+			with suppress(Exception):
+				browser.close()
 
 	return {
 		"cookies": cookies,
@@ -512,29 +606,35 @@ def login_via_browser(*, timeout: int = 120, platform: str = "zhipin") -> dict[s
 
 
 def refresh_stoken_via_cdp(cdp_url: str | None = None) -> str:
-	"""通过 CDP Chrome 刷新 stoken（指纹一致，不会被拒）。"""
+	"""通过既有 CDP Chrome 刷新 stoken；安全页停止，不以 cookie 存在当作验证解除。"""
 	ws_url = probe_cdp(cdp_url)
 	if not ws_url:
 		raise ConnectionError("CDP 不可用")
 
 	pw = sync_playwright().start()
-	browser = pw.chromium.connect_over_cdp(ws_url)
-	ctx = browser.contexts[0] if browser.contexts else browser.new_context()
-	page = ctx.new_page()
-
-	home_loaded = _warm_home_for_runtime(page, HOME_URL, stage="刷新 stoken")
-	time.sleep(_STOKEN_GENERATION_WAIT)
-
-	# 页面未成功加载时跳过 evaluate，避免 patchright 永久挂起
-	stoken = _extract_stoken(page) if home_loaded else ""
-	if not stoken:
-		# 安全验证跳转期间 goto 可能未触发 domcontentloaded，但 cookie jar 已生成 stoken
-		for cookie in ctx.cookies():
-			if cookie.get("name") == "__zp_stoken__":
-				stoken = cookie.get("value", "")
-				break
-	page.close()
-	pw.stop()
+	page = None
+	try:
+		browser = pw.chromium.connect_over_cdp(ws_url)
+		for existing_context in browser.contexts:
+			for existing_page in existing_context.pages:
+				_raise_if_security_page(existing_page, is_cdp=True)
+		ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+		page = ctx.new_page()
+		home_loaded = _warm_home_for_runtime(page, HOME_URL, stage="刷新 stoken", is_cdp=True)
+		time.sleep(_STOKEN_GENERATION_WAIT)
+		_raise_if_security_page(page, is_cdp=True)
+		stoken = _extract_stoken(page) if home_loaded else ""
+		if not stoken:
+			for cookie in ctx.cookies():
+				if cookie.get("name") == "__zp_stoken__":
+					stoken = cookie.get("value", "")
+					break
+	finally:
+		if page is not None:
+			with suppress(Exception):
+				page.close()
+		with suppress(Exception):
+			pw.stop()
 
 	if not stoken:
 		raise RuntimeError("CDP 刷新 stoken 失败：页面未生成 stoken")
@@ -550,15 +650,17 @@ def refresh_stoken(cookies: dict[str, Any], user_agent: str) -> str:
 			[{"name": name, "value": value, "domain": ".zhipin.com", "path": "/"} for name, value in cookies.items()]
 		)
 		page = context.new_page()
-		home_loaded = _warm_home_for_runtime(page, HOME_URL, stage="刷新 stoken")
-		stoken = _extract_stoken(page) if home_loaded else ""
-		if not stoken:
-			# 安全验证跳转期间 goto 可能未触发 domcontentloaded，但 cookie jar 已生成 stoken
-			for cookie in context.cookies():
-				if cookie.get("name") == "__zp_stoken__":
-					stoken = cookie.get("value", "")
-					break
-		browser.close()
+		try:
+			home_loaded = _warm_home_for_runtime(page, HOME_URL, stage="刷新 stoken")
+			stoken = _extract_stoken(page) if home_loaded else ""
+			if not stoken:
+				for cookie in context.cookies():
+					if cookie.get("name") == "__zp_stoken__":
+						stoken = cookie.get("value", "")
+						break
+		finally:
+			with suppress(Exception):
+				browser.close()
 
 	return stoken
 

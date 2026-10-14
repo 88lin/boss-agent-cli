@@ -48,7 +48,19 @@ SCHEMA_DATA = {
 					"type": "string",
 					"default": None,
 					"description": "按现有本地能力矩阵反查平台状态；返回 available / not_supported，blocked_by_policy 仅保留空兼容分组",
-					"choices": ["search", "detail", "recommend", "me", "status", "greet", "apply", "shortlist", "stats", "config", "schema"],
+					"choices": [
+						"search",
+						"detail",
+						"recommend",
+						"me",
+						"status",
+						"greet",
+						"apply",
+						"shortlist",
+						"stats",
+						"config",
+						"schema",
+					],
 				},
 			},
 		},
@@ -64,7 +76,7 @@ SCHEMA_DATA = {
 			},
 		},
 		"doctor": {
-			"description": "诊断本地运行环境、依赖、分层认证健康、CDP 可达性、CDP code 37 风控锁状态和网络连通性；默认不做真实业务探测，浏览器通道不得用于规避平台风控",
+			"description": "诊断本地运行环境、依赖、分层认证健康、CDP 可达性、BOSS 本地风险锁状态和网络连通性；锁未解除时不发送平台探测，浏览器通道不得用于规避平台风控",
 			"args": [],
 			"options": {
 				"--live-probe": {
@@ -90,7 +102,11 @@ SCHEMA_DATA = {
 			"description": "启动真人纯向导，或通过 JSON 执行、恢复、查询和停止共享 workflow；role/platform/goal 取值见顶层 wizard_catalog",
 			"args": [],
 			"options": {
-				"--input-json": {"type": "string", "default": None, "description": "包含 role/platform/goal/inputs/requested_steps 的 JSON object"},
+				"--input-json": {
+					"type": "string",
+					"default": None,
+					"description": "包含 role/platform/goal/inputs/requested_steps 的 JSON object",
+				},
 				"--resume": {"type": "string", "default": None, "description": "恢复指定 workflow run_id"},
 				"--status": {"type": "string", "default": None, "description": "查询指定 workflow run_id"},
 				"--stop": {"type": "string", "default": None, "description": "停止指定 workflow run_id"},
@@ -358,7 +374,11 @@ SCHEMA_DATA = {
 				{"name": "query", "required": False, "description": "搜索关键词；提供 --url 时可省略"},
 			],
 			"options": {
-				"--url": {"type": "string", "default": None, "description": "BOSS 直聘搜索页 URL（可从网页复制完整筛选条件）"},
+				"--url": {
+					"type": "string",
+					"default": None,
+					"description": "BOSS 直聘搜索页 URL（可从网页复制完整筛选条件）",
+				},
 				"--city": {"type": "string", "default": None, "description": "城市名称"},
 				"--salary": {"type": "string", "default": None, "description": "薪资范围"},
 				"--experience": {"type": "string", "default": None, "description": "经验要求，支持逗号分隔多选"},
@@ -449,18 +469,30 @@ SCHEMA_DATA = {
 		"chatmsg": {
 			"description": "查看与指定好友的聊天消息历史；--raw 输出保真结构化消息字段。",
 			"args": [
-				{"name": "security_id", "required": True, "description": "联系人的 uid（推荐，取自 chat 命令输出，跨请求稳定）或 security_id"},
+				{
+					"name": "security_id",
+					"required": True,
+					"description": "联系人的 uid（推荐，取自 chat 命令输出，跨请求稳定）或 security_id",
+				},
 			],
 			"options": {
 				"--page": {"type": "int", "default": 1, "description": "页码"},
 				"--count": {"type": "int", "default": 20, "description": "每页消息数量"},
-				"--raw": {"type": "bool", "default": False, "description": "保真输出结构化 body、链接、职位卡片字段和原始消息对象"},
+				"--raw": {
+					"type": "bool",
+					"default": False,
+					"description": "保真输出结构化 body、链接、职位卡片字段和原始消息对象",
+				},
 			},
 		},
 		"chat-summary": {
 			"description": "基于聊天历史生成结构化摘要与下一步建议。",
 			"args": [
-				{"name": "security_id", "required": True, "description": "联系人的 uid（推荐，取自 chat 命令输出，跨请求稳定）或 security_id"},
+				{
+					"name": "security_id",
+					"required": True,
+					"description": "联系人的 uid（推荐，取自 chat 命令输出，跨请求稳定）或 security_id",
+				},
 			],
 			"options": {
 				"--page": {"type": "int", "default": 1, "description": "页码"},
@@ -470,7 +502,11 @@ SCHEMA_DATA = {
 		"mark": {
 			"description": "给联系人添加或移除标签。",
 			"args": [
-				{"name": "security_id", "required": True, "description": "联系人的 uid（推荐，取自 chat 命令输出，跨请求稳定）或 security_id"},
+				{
+					"name": "security_id",
+					"required": True,
+					"description": "联系人的 uid（推荐，取自 chat 命令输出，跨请求稳定）或 security_id",
+				},
 			],
 			"options": {
 				"--label": {
@@ -485,7 +521,11 @@ SCHEMA_DATA = {
 		"exchange": {
 			"description": "请求交换联系方式（手机号或微信）。",
 			"args": [
-				{"name": "security_id", "required": True, "description": "联系人的 uid（推荐，取自 chat 命令输出，跨请求稳定）或 security_id"},
+				{
+					"name": "security_id",
+					"required": True,
+					"description": "联系人的 uid（推荐，取自 chat 命令输出，跨请求稳定）或 security_id",
+				},
 			],
 			"options": {
 				"--type": {
@@ -512,7 +552,7 @@ SCHEMA_DATA = {
 			"options": {},
 		},
 		"crawl": {
-			"description": "可恢复的 DrissionPage 批量采集（子命令：configure/run/start/status/results/resume/stop）；风险码或安全页会保存断点后停止。",
+			"description": "可恢复的 DrissionPage 批量采集（子命令：configure/run/start/status/results/resume/stop）；同 data_dir 风险锁在浏览器构造前阻断启动/恢复，新风险锁存并保存断点；仅读取/本地导入不受影响。",
 			"args": [],
 			"options": {
 				"run": {
@@ -520,11 +560,24 @@ SCHEMA_DATA = {
 					"--pages": {"type": "int", "default": 5, "minimum": 1, "description": "严格正数页数上限"},
 					"--with-detail": {"type": "bool", "default": False, "description": "串行补全所有职位的 job_card"},
 					"--hook-profile": {"type": "string", "default": "none", "enum": ["screenshot-full", "none"]},
-					"--hook-dir": {"type": "string", "default": None, "description": "screenshot-full 必填：用户已授权的原始 Hook 目录，须含 SHA256SUMS"},
+					"--hook-dir": {
+						"type": "string",
+						"default": None,
+						"description": "screenshot-full 必填：用户已授权的原始 Hook 目录，须含 SHA256SUMS",
+					},
 				},
 				"resume": {
-					"--pages": {"type": "int", "default": None, "minimum": 1, "description": "覆盖原任务的严格正数页数上限"},
-					"--with-detail": {"type": "bool", "default": False, "description": "补全已采职位和后续职位的 job_card"},
+					"--pages": {
+						"type": "int",
+						"default": None,
+						"minimum": 1,
+						"description": "覆盖原任务的严格正数页数上限",
+					},
+					"--with-detail": {
+						"type": "bool",
+						"default": False,
+						"description": "补全已采职位和后续职位的 job_card",
+					},
 					"--background": {"type": "bool", "default": False, "description": "后台恢复并立即返回 run_id"},
 				},
 				"results": {
@@ -532,7 +585,11 @@ SCHEMA_DATA = {
 					"--detail-status": {"type": "string", "default": None, "enum": ["completed", "pending"]},
 				},
 				"shortlist": {
-					"--selector": {"type": "string", "default": None, "description": "导入 results 返回的非敏感 selector，可重复传入"},
+					"--selector": {
+						"type": "string",
+						"default": None,
+						"description": "导入 results 返回的非敏感 selector，可重复传入",
+					},
 					"--all": {"type": "bool", "default": False, "description": "导入该 run 的全部可关联职位"},
 					"--tags": {"type": "string", "default": "", "description": "写入候选池的本地标签，逗号分隔"},
 					"--note": {"type": "string", "default": "", "description": "写入候选池的本地备注"},
@@ -544,7 +601,7 @@ SCHEMA_DATA = {
 				"start <query>": "创建后台任务并立即返回 run_id（供 MCP 轮询）",
 				"status <run_id>": "读取页游标、详情进度和风险状态",
 				"results <run_id>": "读取已持久化职位结果",
-				"resume <run_id>": "从已保存页游标和详情队列继续",
+				"resume <run_id>": "从已保存页游标和详情队列继续；不清除风险锁，须由用户确认官方目标页恢复后显式 clean --risk-lock",
 				"stop <run_id>": "请求运行中的 crawl 在下一个安全点停止并保留断点",
 				"shortlist <run_id>": "将 crawl 结果导入本地职位候选池",
 			},
@@ -628,7 +685,11 @@ SCHEMA_DATA = {
 				{"name": "job_id", "required": True, "description": "加密职位 ID"},
 			],
 			"options": {
-				"--lid": {"type": "string", "default": "", "description": "列表项 ID（可选，从 search/recommend 结果的 lid 字段获取）"},
+				"--lid": {
+					"type": "string",
+					"default": "",
+					"description": "列表项 ID（可选，从 search/recommend 结果的 lid 字段获取）",
+				},
 			},
 		},
 		"shortlist": {
@@ -636,6 +697,7 @@ SCHEMA_DATA = {
 			"args": [],
 			"options": {
 				"add": {
+					"--lid": {"type": "string", "default": "", "description": "与 security_id 同一列表项的访问上下文（可选；不推断有效期）"},
 					"--tags": {"type": "string", "default": "", "description": "本地标签，逗号分隔"},
 					"--note": {"type": "string", "default": "", "description": "本地备注"},
 				},
@@ -708,7 +770,7 @@ SCHEMA_DATA = {
 				"--risk-lock": {
 					"type": "bool",
 					"default": False,
-					"description": "手动解除 CDP code 37 风控锁；仅在用户已于该 Chrome 页面确认恢复后使用，Agent 不应自行执行",
+					"description": "用户确认 BOSS 官方目标业务页风险解除后显式清除本地风险锁；不解除服务器风险，Agent 不应自行执行",
 				},
 			},
 		},
@@ -774,6 +836,11 @@ SCHEMA_DATA = {
 			),
 			"args": [],
 			"options": {
+				"--resume": {
+					"type": "bool",
+					"default": False,
+					"description": "仅用于 agent run：操作者确认官方验证完成后显式解除停止状态，保留已确认动作与断点；Agent 不应自行添加",
+				},
 				"--dry-run": {
 					"type": "bool",
 					"default": False,
@@ -786,7 +853,7 @@ SCHEMA_DATA = {
 				},
 			},
 			"subcommands": {
-				"run": "运行一轮招聘自动化",
+				"run": "运行一轮招聘自动化；--resume 显式恢复停止状态并保留断点",
 				"train": "训练校准模式：默认演练，--live 直接执行满足阈值的动作",
 				"review list": "查看旧版本遗留的人工复核队列",
 				"review approve <id>": "处理旧版本复核项并写入兼容 pending 队列",
@@ -803,7 +870,11 @@ SCHEMA_DATA = {
 			"args": [],
 			"options": {
 				"greet": {
-					"--yes": {"type": "bool", "default": False, "description": "操作者明确批准该候选人和话术后才可发送"},
+					"--yes": {
+						"type": "bool",
+						"default": False,
+						"description": "操作者明确批准该候选人和话术后才可发送",
+					},
 					"--dry-run": {"type": "bool", "default": False, "description": "只预览，不发送"},
 				},
 				"accept-resume": {
@@ -812,7 +883,11 @@ SCHEMA_DATA = {
 					"--dry-run": {"type": "bool", "default": False, "description": "只预览，不请求平台"},
 				},
 				"download-resume": {
-					"--message-id": {"type": "int", "required": True, "description": "已收到的附件消息 mid，不是请求 mid"},
+					"--message-id": {
+						"type": "int",
+						"required": True,
+						"description": "已收到的附件消息 mid，不是请求 mid",
+					},
 					"--output": {"type": "string", "required": True, "description": "本地输出文件路径，不覆盖已有文件"},
 				},
 			},

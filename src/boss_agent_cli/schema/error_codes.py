@@ -57,12 +57,12 @@ ERROR_CODES: dict[str, dict[str, Any]] = {
 	"ENVIRONMENT_RISK": {
 		"message": "访问环境存在异常",
 		"recoverable": False,
-		"recovery_action": "停止自动化访问；保留当前专用 profile，在官方页面确认并降低访问频率",
+		"recovery_action": "停止自动化访问；保留原会话，在官方目标业务页确认风险解除后，由用户执行 boss clean --risk-lock 并显式恢复任务，降低访问频率",
 	},
 	"ENVIRONMENT_RISK_LOCKED": {
-		"message": "CDP Chrome 的 stoken 此前命中 code 37 且尚未更新，本次请求未发送",
+		"message": "此前记录的环境风险锁尚未由用户显式解除，本次请求未发送",
 		"recoverable": False,
-		"recovery_action": "在该 CDP Chrome 中手动打开 BOSS 直聘职位列表页确认能正常加载，等几分钟后再重试；必要时 boss clean --risk-lock",
+		"recovery_action": "在原会话的 BOSS 官方目标业务页确认风险解除后，由用户执行 boss clean --risk-lock 并显式恢复任务；令牌变化不会自动解锁",
 	},
 	"LOGIN_TIMEOUT": {
 		"message": "登录等待超时（扫码未完成或网络缓慢）",
@@ -117,7 +117,7 @@ ERROR_CODES: dict[str, dict[str, Any]] = {
 	"ACCOUNT_RISK": {
 		"message": "风控拦截",
 		"recoverable": False,
-		"recovery_action": "停止自动化访问，回到平台官网手动处理，必要时联系客服",
+		"recovery_action": "停止自动化访问，回到平台官网手动处理；确认目标业务页风险解除后，由用户执行 boss clean --risk-lock 并显式恢复任务，必要时联系客服",
 	},
 	"COMPLIANCE_BLOCKED": {
 		"message": "历史版本能力策略阻断（当前版本不主动产生）",

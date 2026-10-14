@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
+
+from boss_agent_cli.api.client import PlatformRiskError
+from boss_agent_cli.api.zhipin_errors import raise_platform_risk_response, response_message
 
 from boss_agent_cli.automation.models import (
 	ActionResult,
@@ -46,6 +49,7 @@ class BossRecruiterAutomationPlatform:
 	def __init__(self, recruiter: BossRecruiterPlatformLike | None = None) -> None:
 		self._recruiter = recruiter
 		self._warning = ""
+		self._risk: PlatformRiskError | None = None
 
 	@classmethod
 	def from_context(
@@ -75,25 +79,29 @@ class BossRecruiterAutomationPlatform:
 		tabs: list[str],
 		max_per_tab: int,
 	) -> list[ConversationRef]:
-		if self._recruiter is None:
+		recruiter = self._recruiter
+		if recruiter is None:
 			return [_diagnostic_ref("zhipin", self._warning)]
+		self._ensure_not_risk_stopped()
 		items: list[dict[str, Any]] = []
 		if "新招呼" in tabs:
-			items.extend(_items_from_response(self._recruiter.greet_list(page=1)))
+			items.extend(_items_from_response(self._checked_response(lambda: recruiter.greet_list(page=1))))
 		if "未读" in tabs or not items:
-			items.extend(_items_from_response(self._recruiter.friend_list(page=1)))
+			items.extend(_items_from_response(self._checked_response(lambda: recruiter.friend_list(page=1))))
 		return [_ref_from_item(item) for item in items[:max_per_tab]]
 
 	def read_conversation(self, ref: ConversationRef) -> Conversation:
+		self._ensure_not_risk_stopped()
 		if ref.conversation is not None:
 			return ref.conversation
-		if self._recruiter is None:
+		recruiter = self._recruiter
+		if recruiter is None:
 			return Conversation(title=ref.id, fingerprint=ConversationFingerprint(ref.id))
 		try:
 			gid = int(ref.id)
 		except ValueError:
 			return Conversation(title=ref.id, fingerprint=ConversationFingerprint(ref.id))
-		return _conversation_from_history(ref.id, self._recruiter.chat_history(gid))
+		return _conversation_from_history(ref.id, self._checked_response(lambda: recruiter.chat_history(gid)))
 
 	def execute_action(
 		self,
@@ -101,19 +109,44 @@ class BossRecruiterAutomationPlatform:
 		message: str,
 		ref: ConversationRef,
 	) -> ActionResult:
-		if self._recruiter is None:
+		recruiter = self._recruiter
+		if recruiter is None:
 			return ActionResult("blocked", {"reason": self._warning})
+		self._ensure_not_risk_stopped()
 		friend_id = _friend_id(ref.id)
 		match action:
 			case PlatformAction.SEND_QUESTIONNAIRE | PlatformAction.SEND_FOLLOW_UP:
-				result = self._recruiter.send_message_by_friend(friend_id, message)
+				result = self._checked_response(
+					lambda: recruiter.send_message_by_friend(friend_id, message), require_success=False
+				)
 			case PlatformAction.EXCHANGE_CONTACT:
-				result = self._recruiter.exchange_request_by_friend(friend_id, 2)
+				result = self._checked_response(
+					lambda: recruiter.exchange_request_by_friend(friend_id, 2), require_success=False
+				)
 			case PlatformAction.CREATE_INTERVIEW_LEAD:
 				return ActionResult("executed", {"local_only": True})
 			case _:
 				return ActionResult("blocked", {"reason": f"unsupported action {action}"})
 		return _action_result(result)
+
+	def _ensure_not_risk_stopped(self) -> None:
+		if self._risk is not None:
+			raise self._risk
+
+	def _checked_response(
+		self, operation: Callable[[], dict[str, Any]], *, require_success: bool = True
+	) -> dict[str, Any]:
+		self._ensure_not_risk_stopped()
+		try:
+			response = operation()
+			raise_platform_risk_response(response)
+		except PlatformRiskError as exc:
+			self._warning = str(exc) or exc.code
+			self._risk = exc
+			raise
+		if require_success and not (response.get("code") == 0 or response.get("ok") is True):
+			raise RuntimeError(response_message(response) or "招聘者读取失败，不能将错误响应视为空列表")
+		return response
 
 	def health_check(self) -> PlatformHealth:
 		if self._warning:

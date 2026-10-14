@@ -76,7 +76,7 @@ CLI 中，`boss agent crawl --run-id <run_id> --resume <简历名>` 只处理已
 boss agent crawl --query "AI 工程师" --city 杭州 --pages 3 --with-detail --resume <简历名>
 ```
 
-默认不注入 Hook。只有拥有相应授权时，才可在 CLI 显式传 `--hook-profile screenshot-full --hook-dir <含 SHA256SUMS 的目录>`；项目不随包发布第三方脚本。需要立即终止时执行 `boss crawl stop <run_id>`。当 `crawl_status` 返回 `risk_stopped` 或 `budget_stopped` 时，不要重新建任务或循环重试；保留 `run_id`，由用户处理后执行 `boss crawl resume <run_id>`。
+默认不注入 Hook。只有拥有相应授权时，才可在 CLI 显式传 `--hook-profile screenshot-full --hook-dir <含 SHA256SUMS 的目录>`；项目不随包发布第三方脚本。需要立即终止时执行 `boss crawl stop <run_id>`。当 `crawl_status` 返回 `risk_stopped` 时，同 `data_dir` 的风险锁会在浏览器构造前阻断所有新采集和恢复；保留 `run_id`，由用户确认官方目标业务页恢复后执行 `boss clean --risk-lock`，再显式 `boss crawl resume <run_id>`。恢复步骤属于 `operator_actions`，Agent 不自行清锁。`budget_stopped` 需处理预算后恢复；两者均不应重新建任务或循环重试。本地状态、结果和导入仍可用。
 
 ### 招聘者 workflow
 
@@ -112,15 +112,19 @@ boss status
 
 常见恢复动作：
 - `AUTH_REQUIRED` / `AUTH_EXPIRED` / `TOKEN_REFRESH_FAILED`：重新执行 `boss login`
-- `ENVIRONMENT_RISK`：停止自动化访问；保留当前专用 profile，在官方页面确认并降低访问频率
-- `ENVIRONMENT_RISK_LOCKED`：CDP Chrome 的 stoken 仍是此前命中 code 37 的那一个，请求未发出；停止自动化，请用户在该 Chrome 打开职位列表页、确认加载后等几分钟再试，不要自行执行 `boss clean --risk-lock`
+- `ACCOUNT_RISK` / `ENVIRONMENT_RISK`：停止自动化访问并锁存本地状态；code `31`（IP/环境限制）/ `32`（账号限制）/ `35` / `36`、环境类或含糊的 code `37`、HTTP 403 和官方 `403.html` 访问受限页及 `verify.html` / `security.html` 都进入停止分支，`error.details.risk_lock` 保留原始原因、可用业务码和 `explicit_resume_required`
+- `ENVIRONMENT_RISK_LOCKED`：历史环境锁尚未显式解除，请求未发出；令牌变化、httpx / headless / CDP 通道切换与 `login --ignore-risk-lock` 都不放行。由用户在原会话的官方目标业务页确认恢复，执行 `boss clean --risk-lock` 后显式恢复任务；主页正常不代表目标页恢复，本地清锁不代表平台解封，再次命中风险立即重锁。Agent 不应自行清锁
+- 访问受限页的恢复时间只作平台提示，不自动刷新或清锁；移动端可用不能代替网页目标页验收
+- code `37` 只有凭据语义和明确过期/登录失效语义同时存在时才允许有限刷新；裸 `token` / `stoken`、非法或安全验证文案均停止，安全验证和环境异常优先于过期文案
 - `wt2` 存在但 `stoken` 缺失：通常为部分登录态；使用 Chrome CDP 远程调试端口后运行 `boss login --cdp`，或重新执行 `boss login`
-- `RATE_LIMITED`：等待后重试
+- `RATE_LIMITED`：已声明可重放的读取可有限冷却；写操作先核对是否生效
 - `NOT_SUPPORTED`：切换 schema catalog 中支持该 goal 的平台或 workflow
-- `WORKFLOW_TIMEOUT`：保留 `run_id`，调整超时后执行 `boss wizard --resume <run_id>`
+- `WORKFLOW_TIMEOUT`：正常 wizard 超时保留 `run_id`，调整超时后显式 `boss wizard --resume <run_id>`；若 MCP 返回 `outcome_unknown=true`，先核对未确认的动作，禁止直接重试
 - `INVALID_PARAM`：校正参数（城市、福利、页码等）
 
 ## 4) 工具协议直出
+
+招聘者自动化的停止状态不会被普通 `agent run` 清除。操作者在原浏览器完成官方验证、核对受阻页面及未确认动作后，可明确调用 `boss --role recruiter agent run --resume`；MCP `boss_agent_run.resume=true` 同样需要该明确恢复指令。恢复复用已确认动作的防重记录。
 
 不同 Agent host 需要不同形态的工具定义，`boss schema --format` 一次产出：
 
@@ -129,6 +133,8 @@ boss schema --format openai-tools     # OpenAI Functions / Tools API
 boss schema --format anthropic-tools  # Claude Tool Use API
 boss schema --format mcp-tools        # Model Context Protocol Tools
 ```
+
+三个工具格式均来自运行时共享的 77 个 MCP 工具目录，名称与输入参数保持一致；原生格式继续按 39 个顶层命令描述 CLI。
 
 输出可直接喂给对应 host，无需手写适配。
 

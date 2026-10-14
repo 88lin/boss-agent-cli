@@ -111,8 +111,11 @@ def handle_error_output(
 
 	if is_json_mode(ctx):
 		emit_error(
-			command, code=code, message=message,
-			recoverable=recoverable, recovery_action=recovery_action,
+			command,
+			code=code,
+			message=message,
+			recoverable=recoverable,
+			recovery_action=recovery_action,
 			details=details,
 			hints=hints,
 		)
@@ -128,9 +131,12 @@ def handle_not_supported(ctx: Any, command: str, exc: Exception, *, fallback_mes
 	"""命令因平台不支持而抛 NotImplementedError 时的统一错误信封。"""
 	_, recovery_action = error_contract_for_code("NOT_SUPPORTED")
 	handle_error_output(
-		ctx, command, code="NOT_SUPPORTED",
+		ctx,
+		command,
+		code="NOT_SUPPORTED",
 		message=str(exc) or fallback_message,
-		recoverable=True, recovery_action=recovery_action,
+		recoverable=True,
+		recovery_action=recovery_action,
 	)
 
 
@@ -141,10 +147,16 @@ def handle_platform_error_output(
 	response: Any,
 	*,
 	fallback_message: str,
+	unknown_error_code: str | None = None,
 ) -> None:
 	"""Emit a schema-backed error envelope for an unsuccessful platform response."""
 	code, message = platform.parse_error(response)
+	if code == "UNKNOWN" and unknown_error_code is not None:
+		code = unknown_error_code
 	recoverable, recovery_action = error_contract_for_code(code)
+	hints = None
+	if code in RISK_ERROR_CONTRACTS:
+		recovery_action, hints = risk_error_contract(code)
 	details = None
 	if isinstance(response, dict):
 		error = response.get("error")
@@ -155,6 +167,8 @@ def handle_platform_error_output(
 		cli_details = response.get("__cli_error_details__")
 		if details is None and isinstance(cli_details, dict) and cli_details:
 			details = cli_details
+		if code in RISK_ERROR_CONTRACTS and response.get("code") in (31, "31", 32, "32", 35, "35", 36, "36", 37, "37"):
+			details = {**(details or {}), "platform_code": response.get("__cli_platform_code__", int(response["code"]))}
 	handle_error_output(
 		ctx,
 		command,
@@ -163,6 +177,7 @@ def handle_platform_error_output(
 		recoverable=recoverable,
 		recovery_action=recovery_action,
 		details=details,
+		hints=hints,
 	)
 
 
@@ -259,9 +274,10 @@ def render_status(data: dict[str, Any], *, login_action: str = "boss login") -> 
 	lock = data.get("cdp_risk_lock")
 	if isinstance(lock, dict) and lock.get("locked"):
 		since = lock.get("locked_at") or "unknown"
+		reason = lock.get("reason") or "ENVIRONMENT_RISK"
 		console.print(
-			f"[yellow]CDP code 37 风控锁定中[/yellow]（{since} 起）：在该 Chrome 里打开职位列表页确认能正常加载，"
-			"等几分钟后重试；必要时 boss clean --risk-lock"
+			f"[yellow]BOSS 本地风控锁定中[/yellow]（{since} 起，{reason}）：确认官方目标业务页已恢复后，"
+			"由用户执行 boss clean --risk-lock 再显式恢复任务；令牌变化不会自动解锁"
 		)
 
 
@@ -355,7 +371,7 @@ def render_string_grid(items: list[str], title: str, *, columns: int = 4) -> Non
 		table.add_column(max_width=20)
 
 	for i in range(0, len(items), columns):
-		row = items[i:i + columns]
+		row = items[i : i + columns]
 		while len(row) < columns:
 			row.append("")
 		table.add_row(*row)
@@ -548,24 +564,24 @@ class SearchProgress:
 #: 保证同一个码在两条路径上给 Agent 的恢复指引逐字一致（Issue #419）。
 RISK_ERROR_CONTRACTS: dict[str, dict[str, Any]] = {
 	"ACCOUNT_RISK": {
-		"recovery_action": "停止自动化访问；回到 BOSS 直聘官方页面手动处理，必要时联系 BOSS 直聘客服",
+		"recovery_action": ERROR_CODES["ACCOUNT_RISK"]["recovery_action"],
 		"next_actions": [
 			"不要通过 CDP、patchright 或其他通道重试该操作",
-			"只保留本地辅助和用户主动触发的只读命令",
+			"锁未解除时只使用本地辅助和离线状态命令；官方目标业务页恢复后由用户显式清除本地锁",
 		],
 	},
 	"ENVIRONMENT_RISK": {
-		"recovery_action": "停止自动化访问；保留当前专用 profile，在 BOSS 直聘官方页面确认并降低访问频率",
+		"recovery_action": ERROR_CODES["ENVIRONMENT_RISK"]["recovery_action"],
 		"next_actions": [
 			"不要刷新 Token、重新登录或自动重试该请求",
-			"稍后由用户在同一专用 Chrome profile 中确认页面状态后再手动发起",
+			"由用户在原会话确认官方目标业务页恢复后，显式清除本地锁并恢复任务",
 		],
 	},
 	"ENVIRONMENT_RISK_LOCKED": {
-		"recovery_action": "在该 CDP Chrome 中手动打开 BOSS 直聘职位列表页确认能正常加载，等几分钟后再重试；必要时 boss clean --risk-lock",
+		"recovery_action": ERROR_CODES["ENVIRONMENT_RISK_LOCKED"]["recovery_action"],
 		"next_actions": [
 			"不要刷新 Token、重新登录或换通道重试；本次请求未发出",
-			"由用户在同一 CDP Chrome 里打开职位列表页、确认加载正常并等待几分钟后再手动发起",
+			"由用户在原会话确认官方目标业务页恢复后，执行 boss clean --risk-lock 并显式恢复任务；令牌变化不放行",
 			"boss doctor — 查看本地风控锁状态",
 		],
 	},
@@ -599,6 +615,7 @@ def handle_auth_errors(command_name: str) -> Callable[[Callable[..., Any]], Call
 			from boss_agent_cli.api.browser_source import BrowserSourceUnavailable, BrowserSourceUnsupported
 			from boss_agent_cli.api.client import PlatformRiskError
 			from boss_agent_cli.auth.manager import AuthRequired, TokenRefreshFailed
+
 			try:
 				return func(ctx, *args, **kwargs)
 			except BrowserSourceUnsupported as e:
@@ -606,13 +623,17 @@ def handle_auth_errors(command_name: str) -> Callable[[Callable[..., Any]], Call
 				# 针对浏览器来源的具体建议走 hints.operator_actions。
 				recoverable, not_supported_recovery = error_contract_for_code("NOT_SUPPORTED")
 				handle_error_output(
-					ctx, command_name, code="NOT_SUPPORTED",
+					ctx,
+					command_name,
+					code="NOT_SUPPORTED",
 					message=str(e),
 					recoverable=recoverable,
 					recovery_action=not_supported_recovery,
-					hints={"operator_actions": [
-						"该平台没有浏览器通道，改用默认 --browser-source auto 或切换到 zhipin",
-					]},
+					hints={
+						"operator_actions": [
+							"该平台没有浏览器通道，改用默认 --browser-source auto 或切换到 zhipin",
+						]
+					},
 				)
 			except BrowserSourceUnavailable as e:
 				hints: dict[str, list[str]] = {}
@@ -632,53 +653,75 @@ def handle_auth_errors(command_name: str) -> Callable[[Callable[..., Any]], Call
 			except BrowserChannelRequired as e:
 				recoverable, not_supported_recovery = error_contract_for_code("NOT_SUPPORTED")
 				handle_error_output(
-					ctx, command_name, code="NOT_SUPPORTED",
+					ctx,
+					command_name,
+					code="NOT_SUPPORTED",
 					message=str(e),
 					recoverable=recoverable,
 					recovery_action=not_supported_recovery,
-					hints={"operator_actions": [
-						"CDP 模式下所有平台请求只走浏览器通道；该操作暂无浏览器实现，请在 BOSS 直聘官方页面手动完成",
-					]},
+					hints={
+						"operator_actions": [
+							"CDP 模式下所有平台请求只走浏览器通道；该操作暂无浏览器实现，请在 BOSS 直聘官方页面手动完成",
+						]
+					},
 				)
 			except RecruiterChatTabRequired as e:
 				handle_error_output(
-					ctx, command_name, code="RECRUITER_CHAT_TAB_REQUIRED",
+					ctx,
+					command_name,
+					code="RECRUITER_CHAT_TAB_REQUIRED",
 					message=str(e),
 					recoverable=True,
 					recovery_action="回到 BOSS 直聘官方招聘者页面手动处理",
-					hints={"next_actions": [
-						"在 BOSS 直聘官方页面确认候选人和沟通上下文",
-						"保持 CLI 默认低风险模式，不通过自动化链路发送消息或请求简历",
-					]},
+					hints={
+						"next_actions": [
+							"在 BOSS 直聘官方页面确认候选人和沟通上下文",
+							"保持 CLI 默认低风险模式，不通过自动化链路发送消息或请求简历",
+						]
+					},
 				)
 			except AuthRequired:
 				login_action = login_action_for_ctx(ctx)
 				handle_error_output(
-					ctx, command_name, code="AUTH_REQUIRED",
+					ctx,
+					command_name,
+					code="AUTH_REQUIRED",
 					message=f"未登录，请先执行 {login_action}",
-					recoverable=True, recovery_action=login_action,
+					recoverable=True,
+					recovery_action=login_action,
 				)
 			except TokenRefreshFailed:
 				login_action = login_action_for_ctx(ctx)
 				handle_error_output(
-					ctx, command_name, code="TOKEN_REFRESH_FAILED",
+					ctx,
+					command_name,
+					code="TOKEN_REFRESH_FAILED",
 					message="Token 刷新失败，请重新登录",
-					recoverable=True, recovery_action=login_action,
+					recoverable=True,
+					recovery_action=login_action,
 				)
 			except PlatformRiskError as e:
 				recovery_action, hints = risk_error_contract(e.code)
 				handle_error_output(
-					ctx, command_name, code=e.code,
+					ctx,
+					command_name,
+					code=e.code,
 					message=str(e),
 					recoverable=False,
 					recovery_action=recovery_action,
+					details=e.details or None,
 					hints=hints or None,
 				)
 			except Exception as e:
 				handle_error_output(
-					ctx, command_name, code="NETWORK_ERROR",
+					ctx,
+					command_name,
+					code="NETWORK_ERROR",
 					message=f"{command_name} 失败: {e}",
-					recoverable=True, recovery_action="重试",
+					recoverable=True,
+					recovery_action="重试",
 				)
+
 		return wrapper
+
 	return decorator

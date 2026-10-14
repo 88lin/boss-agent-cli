@@ -36,11 +36,17 @@ TTY 下只把 `operator_actions` 渲染到 stderr；`next_actions` 是纯 Agent 
 | `boss` / `boss wizard` | TTY 下启动纯向导；`--input-json` 供 Agent 执行共享 workflow，`--status/--resume/--stop <run_id>` 管理持久化任务 |
 | `boss schema` | 输出完整工具能力描述 JSON（39 个顶层命令 + hr 分组展开，Agent 首先调用） |
 | `boss platforms` | 本地平台注册与能力状态（不触网；支持 `--platform` 单平台过滤与 `--capability` 反查，附 `capability_status_legend`） |
-| `boss login` | 用户主动登录（按平台走 Cookie / CDP / QR / 浏览器降级链路）；`--force` 不复用任何既有登录态，跳过本地 Cookie 提取、CDP 下清掉当前 context 内目标平台的 cookie 后重新扫码；CDP 风控锁未解除时拒绝登录，`--ignore-risk-lock` 可显式跳过检查（不解除锁） |
+| `boss login` | 用户主动登录（按平台走 Cookie / CDP / QR / 浏览器降级链路）；`--force` 不复用任何既有登录态，跳过本地 Cookie 提取、CDP 下清掉当前 context 内目标平台的 cookie 后重新扫码；BOSS 本地风险锁未解除时拒绝登录，`--ignore-risk-lock` 仅保留参数兼容，不能放行 |
 | `boss logout` | 退出登录 |
 | `boss status` | 检查登录态（默认仅本地；`--live` 才执行低频只读验证） |
 | `boss doctor` | 诊断环境、依赖、凭据完整性和网络；默认仅本地诊断，`--live-probe` 才执行低频只读探测 |
 | `boss me` | 我的信息（用户/简历/期望/投递记录） |
+
+BOSS 的 code `31`（IP/环境限制）/ `32`（账号限制）/ `35` / `36`、环境类或含糊的 code `37`、HTTP 403 和官方 `403.html` 访问受限页及 `verify.html` / `security.html` 安全页会停止请求并锁存本地状态。明确的凭据过期才能进入有限刷新；仅出现 `token` / `stoken` 或同时要求安全验证时不能刷新。风险锁沿用 `cdp_risk_lock.json` 文件名，覆盖候选人与招聘者的 httpx、CDP、headless、聊天页动作、登录、导入、刷新和同 `data_dir` 的独立 crawl；更换令牌或通道不会自动清除锁。`error.details.risk_lock` 保留原始风险原因、可用业务码与 `explicit_resume_required`；账号风险仍返回 `ACCOUNT_RISK`，历史环境锁继续返回 `ENVIRONMENT_RISK_LOCKED`。
+
+由用户在原会话的官方目标业务页确认恢复后，执行 `boss clean --risk-lock` 解除本地阻断，再显式恢复原任务。主页可访问不代表职位页或聊天页已恢复；该清理命令不解除服务器风险，也不验证线上恢复。`--dry-run` 仅预览；再次命中风险会立即重锁。Agent 不应自行执行清锁。
+
+访问受限页展示的恢复时间只作平台提示，不触发定时刷新或自动清锁；移动端可用也不能证明网页端限制已解除。已有受限页时，`login --force` 在清除 Cookie 前同样停止。
 
 ### 从浏览器 cURL 导入登录态
 
@@ -66,6 +72,8 @@ pbpaste | boss login --curl-file -
 | `boss show <#>` | 按编号查看上次搜索结果 |
 | `boss cities` | 40 个支持城市 |
 
+`recommend` 的 `pagination.has_more` 只在平台返回布尔 `hasMore` 时取 `true` 或 `false`；缺失或类型不明确时为 `null`，`has_more_source=unknown`，不会给出下一页执行提示。仅 `true` 提示翻页；`false` 与 `null` 不触发额外探测。兼容字段 `total` 仍是本次返回条数，`total_kind=returned_page_count`，不代表全量职位数。
+
 ## 可恢复批量采集
 
 `crawl` 是用户显式触发的有界 Chrome 任务。首次使用需安装 `uv sync --extra crawl`；采集器只启动 `<data-dir>/crawl/chrome-profile` 这个独立 profile，不接管日常 Chrome。请求数、详情数、墙钟时间和重试由固定预算控制，每一步持久化 checkpoint，并可用 `stop` 停止。
@@ -90,9 +98,9 @@ boss crawl stop <run_id>
 
 默认 Hook 为 `none`。`screenshot-full` 仅在用户明确选择 `--hook-profile screenshot-full --hook-dir <目录>` 时启用；目录必须由用户拥有相应授权，并提供原始 7 个脚本及 `SHA256SUMS`。项目不再发布这些第三方脚本，运行前逐文件校验 SHA-256 并记录脚本标识与摘要；不记录 Cookie、请求头或完整请求体。
 
-候选人侧可用 `boss agent crawl --run-id <run_id> --resume <简历名>` 执行“完成的 crawl → shortlist → ai fit → 按匹配分排序”，不会启动浏览器；`boss agent crawl --query <关键词> --city <城市> --resume <简历名>` 会新建真实采集。遇到 `risk_stopped` 或 `budget_stopped` 时 Agent 只返回 `run_id` 和恢复命令，不会无限重试或重开会话。
+候选人侧可用 `boss agent crawl --run-id <run_id> --resume <简历名>` 执行“完成的 crawl → shortlist → ai fit → 按匹配分排序”，不会启动浏览器；`boss agent crawl --query <关键词> --city <城市> --resume <简历名>` 会新建真实采集。已有同 `data_dir` 风险锁时，run/start/resume 和 agent 的新采集在浏览器构造、连接及后台拉起前阻断；resume 只恢复自身断点，不能清锁。新风险保持 `risk_stopped` outcome、已采集队列与 checkpoint，并在 `data.risk_lock` 保留结构化原因和可用业务码，未知业务码为 `null`；人工恢复步骤只放在 `hints.operator_actions`，不提供可自动执行的恢复动作。状态、结果、本地 shortlist 导入和读取已完成 run 仍可用。
 
-每页完成后更新 `<data-dir>/crawl/runs/<run_id>/jobs.json`、`jobs.csv` 和带筛选/冻结首行的 `jobs.xlsx`。XLSX 保留完整值但所有数据行固定为单行和统一行高，长内容仅在表格中截断显示。JSON/CSV/XLSX 和 `crawl results` 默认不包含 `security_id`、职位 ID、selector、招聘者姓名或职位；这些仅保留在受限本地 SQLite 状态，`boss clean --privacy` 会删除 crawl 运行、预算和导出。风险码 `37` / `38`、安全页、职位列表容器异常、预算耗尽或 stop 请求都会保存断点并停止；stdout 始终只输出 JSON 信封和恢复命令。
+每页完成后更新 `<data-dir>/crawl/runs/<run_id>/jobs.json`、`jobs.csv` 和带筛选/冻结首行的 `jobs.xlsx`。XLSX 保留完整值但所有数据行固定为单行和统一行高，长内容仅在表格中截断显示。JSON/CSV/XLSX 和 `crawl results` 默认不包含 `security_id`、职位 ID、selector、招聘者姓名或职位；这些仅保留在受限本地 SQLite 状态，`boss clean --privacy` 会删除 crawl 运行、预算和导出。风险码 `31` / `32` / `35` / `36` / `37`、code `38` 的身份资料流程、安全页、职位列表容器异常、预算耗尽或 stop 请求都会保存断点并停止；code `38` 不等同于验证码。stdout 始终只输出 JSON 信封和恢复命令。
 
 ## 求职动作
 
@@ -126,6 +134,8 @@ boss crawl stop <run_id>
 | `boss favorites list/sync` | 读取 BOSS 职位收藏并呈现有效状态；sync 只导入明确有效职位（按职位去重、刷新动态访问 ID，保留首次收藏时间） |
 | `boss preset add/list/remove` | 搜索预设 |
 
+`boss shortlist add <sid> <jid> --lid <lid>` 可保存与 `sid` 同一列表项的访问上下文，`list` / `compare` 会返回该值；crawl 和 favorites 导入也保留对应上下文，favorites 预览继续脱敏。`lid` 可省略，保存不代表其仍有效，不推断有效期或跨账号身份。
+
 ## 招聘者模式
 
 | 命令 | 说明 |
@@ -153,7 +163,15 @@ boss crawl stop <run_id>
 
 `greet` 只发送首次招呼，不建立 MQTT 连接、不清理红点。成功返回 `sent=true`；若发送后本地记录失败，错误信封仍在 `error.details.sent=true` 保留已发送事实，不能因此重发。BOSS 外层 `code=0` 也可能返回权益拦截页；CLI 会识别这类业务拒绝，返回 `GREET_LIMIT`、`error.details.sent=false` 和脱敏平台提示，保留拒绝状态以阻止重发。平台可能按职位限制免费沟通人数，不能把调用方配置的日额度当作平台保证。`chat` / `last-messages` 中未知未读数保留为 `null`，不当作零。
 
-`request-resume` 与 `resume --exchange` 在聊天页里调用官方组件完成动作，只点击本次动作新弹出的确认框。成功需要发送证据：聊天 WS 帧里出现已知请求文案，或动作后回读聊天记录看到新的请求消息。页面动作执行了但两者都没看到时返回 `ACTION_UNCONFIRMED`（`recoverable=false`），`error.details` 附带页面日志、确认按钮状态和 WS 统计。此时动作可能已经生效，先用 `boss hr chatmsg <friend_id>` 核实，不要直接重试。换手机或微信时如果同时看到了求简历消息，成功结果会带 `side_effects: ["resume_request_detected"]`。
+`request-resume` 与 `resume --exchange` 在聊天页里调用官方组件完成动作，只点击本次动作新弹出的确认框。成功需要动作后回读聊天记录看到自己新发出的已知请求文案或已识别类型的动作卡片。只有 outgoing WS 帧、页面调用返回成功或未知手机号动作编号时不能确认发送；这些情况返回 `ACTION_UNCONFIRMED`（`recoverable=false`），`error.details` 附带页面日志、确认按钮状态和 WS 统计。此时动作可能已经生效，先用 `boss hr chatmsg <friend_id>` 核实，不要直接重试。聊天记录证据也不证明接收方已收到或已读。换手机或微信时如果同时看到了求简历消息，成功结果会带 `side_effects: ["resume_request_detected"]`。动作前或回读时首次命中风险立即停止，不继续轮询；禁用或仍在加载的编辑器不会被强制开启，目标好友必须唯一匹配。
+
+### 自动化停止与显式恢复
+
+`boss agent stop --reason <原因>` 保存独立的停止标志，运行中的旧状态快照不能覆盖它。招聘者自动化在动作边界重新读取停止状态，每个已确认动作及时保存防重结果；风险、正常超时或中断时保存已取得的 checkpoint。平台请求已提交但没有确认结果时，先在官方页面核对，禁止自动重发。
+
+在同一浏览器、同一账号完成官方验证并确认原先受阻页面正常后，由操作者明确恢复：`boss --role recruiter agent run --resume`。该选项解除本地停止状态并复用已确认动作与队列，不代表平台风险已经解除；普通 `agent run` 不解锁。MCP `boss_agent_run` 的 `resume` 默认 `false`，Agent 只有收到操作者明确恢复指令后才可设置为 `true`。wizard 和 crawl 的可恢复 run 继续使用各自的 `--resume <run_id>` / `crawl resume <run_id>`；已被 `wizard --stop` 置为 `stopped` 的 run 保持终止，应新建 workflow 或恢复其内部任务。
+
+MCP 的长运行使用异步子进程，运行期间仍能调用停止/状态工具。取消或超时会尝试中断并回收子进程；强制终止后可能有未知副作用，`error.details.outcome_unknown=true` 时不可自动重试。正常返回的 wizard 超时保留可恢复结果，MCP 等待覆盖其显式超时及保存进度的宽限期。
 
 平台要求招聘者先在会话里发过消息，换电话/换微信按钮才会解锁（求简历不受限）。交换前会先看按钮组件是否处于禁用状态（`disabled` 属性、`aria-disabled`、`disabled`/`gray` 等 class、`pointer-events: none`，或组件 props/data 里的禁用标记）；页面上判断不了时，再看动作前读到的完整聊天记录里有没有你发出的消息。确定未解锁时不调用页面交换动作，直接返回 `EXCHANGE_NOT_AVAILABLE`（`recoverable=true`），先回复候选人再试即可；信号拿不准时不拦截，按原流程执行。
 
@@ -204,7 +222,7 @@ boss hr download-resume <friend_id> --message-id <attachment_mid> --output ./res
 | 命令 | 说明 |
 |------|------|
 | `boss config list/set/reset` | 配置管理 |
-| `boss clean` | 清理缓存 |
+| `boss clean` | 清理缓存；`--risk-lock` 在用户确认官方目标业务页恢复后显式清除本地风险锁，`--dry-run` 不解除锁，不宣称平台解封 |
 | `boss stats` | 投递转化漏斗统计（greeted/applied/shortlist） |
 | `boss export <query>` | 导出结果（CSV/JSON/HTML，支持 `--url` 网页筛选） |
 

@@ -1,11 +1,12 @@
 import click
+from typing import Any
 
 from boss_agent_cli.compliance import compliance_mode_data
 from boss_agent_cli.output import emit_success
 from boss_agent_cli.platforms import list_platforms, list_recruiter_platforms
 from boss_agent_cli.schema.availability import inject_availability
 from boss_agent_cli.schema.data import SCHEMA_DATA
-from boss_agent_cli.schema.formats import format_anthropic_tools, format_mcp_tools, format_openai_tools
+from boss_agent_cli.schema.formats import format_anthropic_tools, format_mcp_tools, format_openai_tools, schema_parameter_paths
 from boss_agent_cli.wizard.catalog import catalog_data
 
 
@@ -21,7 +22,7 @@ from boss_agent_cli.wizard.catalog import catalog_data
 def schema_cmd(ctx: click.Context, output_format: str) -> None:
 	"""返回工具完整能力描述的 JSON"""
 	# 动态注入当前会话的平台信息（Issue #129 Week 1b）
-	data = dict(SCHEMA_DATA)
+	data: dict[str, Any] = dict(SCHEMA_DATA)
 	current = (ctx.obj or {}).get("platform") or "zhipin"
 	data["current_platform"] = current
 	data["current_role"] = (ctx.obj or {}).get("role") or "candidate"
@@ -33,12 +34,15 @@ def schema_cmd(ctx: click.Context, output_format: str) -> None:
 	data = inject_availability(data)
 
 	if output_format == "openai-tools":
-		emit_success("schema", {"format": "openai-tools", "tools": format_openai_tools(data)})
+		data = {"format": "openai-tools", "tools": format_openai_tools(data)}
+		emit_success("schema", data, schema_parameter_paths=schema_parameter_paths(data))
 		return
 	if output_format == "anthropic-tools":
-		emit_success("schema", {"format": "anthropic-tools", "tools": format_anthropic_tools(data)})
+		data = {"format": "anthropic-tools", "tools": format_anthropic_tools(data)}
+		emit_success("schema", data, schema_parameter_paths=schema_parameter_paths(data))
 		return
 	if output_format == "mcp-tools":
-		emit_success("schema", {"format": "mcp-tools", "tools": format_mcp_tools(data)})
+		data = {"format": "mcp-tools", "tools": format_mcp_tools(data)}
+		emit_success("schema", data, schema_parameter_paths=schema_parameter_paths(data))
 		return
-	emit_success("schema", data)
+	emit_success("schema", data, schema_parameter_paths=schema_parameter_paths(data))

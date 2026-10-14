@@ -2,6 +2,7 @@
 
 Flow: randkey → getqrcode → poll scan → scanLogin/dispatcher → extract cookies.
 """
+
 import sys
 from typing import Any
 import time
@@ -9,9 +10,40 @@ import time
 import httpx
 
 from boss_agent_cli.api import endpoints
+from boss_agent_cli.api.client import AccountRiskError
+from boss_agent_cli.api.zhipin_errors import platform_risk_page_response, raise_platform_risk_response
 
 _POLL_INTERVAL = 2
 _DEFAULT_TIMEOUT = 120
+
+
+def _checked_response(resp: httpx.Response, *, allow_non_json: bool = False) -> dict[str, Any]:
+	"""每个认证步骤先分类风险，禁止把安全页当作二维码状态继续轮询。"""
+	try:
+		payload = resp.json()
+	except ValueError:
+		payload = None
+	if isinstance(payload, dict):
+		raise_platform_risk_response(payload)
+	try:
+		final_url = str(resp.url)
+	except (AttributeError, RuntimeError):
+		final_url = ""
+	page_risk = platform_risk_page_response(
+		url=final_url,
+		content_type=str(getattr(resp, "headers", {}).get("content-type", "")),
+		body=resp.text if isinstance(resp.text, str) else "",
+	)
+	if page_risk is not None:
+		raise_platform_risk_response(page_risk)
+	if resp.status_code == 403:
+		raise AccountRiskError("二维码登录遇到平台安全验证，请停止并回到官方页面处理", details={"platform_code": None})
+	resp.raise_for_status()
+	if not isinstance(payload, dict):
+		if allow_non_json:
+			return {}
+		raise RuntimeError("二维码登录响应不是 JSON 对象")
+	return payload
 
 
 def qr_login_httpx(*, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
@@ -27,8 +59,7 @@ def qr_login_httpx(*, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
 	with httpx.Client(base_url=endpoints.BASE_URL, headers=headers, follow_redirects=True, timeout=30) as client:
 		# Step 1: Get random key for QR code
 		resp = client.get(endpoints.QR_RANDKEY_URL)
-		resp.raise_for_status()
-		data = resp.json()
+		data = _checked_response(resp)
 		if data.get("code") != 0:
 			raise RuntimeError(f"randkey 请求失败: {data}")
 		rand_key = data.get("zpData", {}).get("randKey", "")
@@ -37,8 +68,7 @@ def qr_login_httpx(*, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
 
 		# Step 2: Get QR code image URL
 		resp = client.get(endpoints.QR_GETQRCODE_URL, params={"content": rand_key})
-		resp.raise_for_status()
-		data = resp.json()
+		data = _checked_response(resp)
 		qr_id = data.get("zpData", {}).get("qrId", "")
 		if not qr_id:
 			raise RuntimeError(f"getqrcode 返回为空: {data}")
@@ -54,8 +84,7 @@ def qr_login_httpx(*, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
 		while time.time() < deadline:
 			time.sleep(_POLL_INTERVAL)
 			resp = client.get(endpoints.QR_SCAN_URL, params={"qrId": qr_id})
-			resp.raise_for_status()
-			scan_data = resp.json()
+			scan_data = _checked_response(resp)
 			scan_code = scan_data.get("code", -1)
 
 			if scan_code == 1:
@@ -79,7 +108,7 @@ def qr_login_httpx(*, timeout: int = _DEFAULT_TIMEOUT) -> dict[str, Any]:
 
 		# Step 4: Complete login via dispatcher
 		resp = client.get(endpoints.QR_DISPATCHER_URL, params={"qrId": qr_id})
-		resp.raise_for_status()
+		_checked_response(resp, allow_non_json=True)
 
 		# Extract all cookies
 		all_cookies = {}

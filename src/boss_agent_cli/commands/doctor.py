@@ -166,30 +166,33 @@ def doctor_cmd(ctx: click.Context, live_probe: bool) -> None:
 	except Exception as e:
 		add_check("cdp", "error", f"CDP 探测失败: {e}", "检查浏览器和调试端口配置")
 
-	# 4.5) CDP code 37 风控锁（只读本地文件，不连浏览器、不访问网络）
-	risk_lock = lock_status(Path(data_dir))
+	# 4.5) BOSS 本地风险锁（沿用历史字段，只读本地文件）
+	risk_lock = lock_status(Path(data_dir)) if platform_name == "zhipin" else {"locked": False}
 	if risk_lock["locked"]:
 		since = risk_lock.get("locked_at", "未知时间")
-		detail = f"CDP Chrome 自 {since} 起处于 code 37 风控锁定，浏览器请求会在本地被拒绝"
+		detail = f"BOSS 自 {since} 起记录 {risk_lock.get('reason', 'ENVIRONMENT_RISK')}，所有平台请求会在本地被拒绝"
 		if risk_lock.get("corrupt"):
-			detail = "CDP 风控锁文件无法解析，浏览器请求会在本地被拒绝"
+			detail = "BOSS 本地风控锁文件无法解析，所有平台请求会在本地被拒绝"
 		add_check(
 			"cdp_risk_lock",
 			"warn",
 			detail,
-			"在该 CDP Chrome 中打开 BOSS 直聘职位列表页，确认能正常加载，等几分钟后重试（stoken 更新后自动解锁）；"
-			"确认已恢复仍被拦时运行 boss clean --risk-lock",
+			"在原会话的 BOSS 官方目标业务页确认风险解除后，由用户运行 boss clean --risk-lock 再显式恢复任务；"
+			"令牌变化不会自动解锁，本地清理不解除服务器风险",
 		)
 	else:
-		add_check("cdp_risk_lock", "ok", "未记录 CDP code 37 风控锁")
+		add_check("cdp_risk_lock", "ok", "未记录 BOSS 本地风控锁")
 
 	# 5) Network probe
-	try:
-		resp = httpx.get(config.site_url, timeout=5, follow_redirects=True)
-		status = "ok" if resp.status_code < 400 else "warn"
-		add_check("network", status, f"访问 {config.site_host} 返回 HTTP {resp.status_code}")
-	except Exception as e:
-		add_check("network", "warn", f"访问 {config.site_host} 失败: {e}", "检查网络、代理或风控拦截")
+	if risk_lock["locked"]:
+		add_check("network", "warn", "本地风险锁未解除，未发送平台网络探测")
+	else:
+		try:
+			resp = httpx.get(config.site_url, timeout=5, follow_redirects=True)
+			status = "ok" if resp.status_code < 400 else "warn"
+			add_check("network", status, f"访问 {config.site_host} 返回 HTTP {resp.status_code}")
+		except Exception as e:
+			add_check("network", "warn", f"访问 {config.site_host} 失败: {e}", "检查网络、代理或风控拦截")
 
 	# 5.5) Browser channel risk assessment
 	cdp_ok = any(item["name"] == "cdp" and item["status"] == "ok" for item in checks)
@@ -208,7 +211,9 @@ def doctor_cmd(ctx: click.Context, live_probe: bool) -> None:
 		)
 
 	# 5.6) Optional low-frequency live read probes
-	if live_probe:
+	if live_probe and risk_lock["locked"]:
+		add_check("live_probe", "warn", "本地风险锁未解除，未执行在线只读探测")
+	elif live_probe:
 		_add_live_probe_checks(ctx, auth, checks)
 
 	# 6) Data dir writable

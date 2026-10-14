@@ -8,9 +8,11 @@
 import argparse
 import asyncio
 import json
+import math
+import signal
 import subprocess
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -25,6 +27,7 @@ from mcp.types import (
 from boss_agent_cli.api.browser_source import POLICIES as BROWSER_SOURCES
 from boss_agent_cli.mcp_args import _build_args
 from boss_agent_cli.mcp_tools import TOOLS
+from boss_agent_cli.output import envelope_error
 
 # 向后兼容的再导出：这些符号在拆分前属于本模块，`mcp-server/server.py` wrapper
 # 与既有测试仍按 `boss_agent_cli.mcp_server.<name>` 取用。本模块自身不再使用它们，
@@ -87,6 +90,9 @@ DEFAULT_MESSAGE_PATH = "/messages/"
 DEFAULT_BOSS_BIN = "boss"
 _BOSS_BIN = DEFAULT_BOSS_BIN
 _BOSS_GLOBAL_ARGS: list[str] = []
+_CLI_TIMEOUT_SECONDS = 120.0
+_CHECKPOINT_GRACE_SECONDS = 5.0
+_TERMINATE_GRACE_SECONDS = 1.0
 
 
 def _configure_boss_invocation(
@@ -112,28 +118,154 @@ def _configure_boss_invocation(
 	_BOSS_GLOBAL_ARGS = args
 
 
-def _run_boss(*args: str) -> dict[str, Any]:
-	"""调用 boss CLI 并返回解析后的 JSON。"""
-	cmd = [_BOSS_BIN, "--json", *_BOSS_GLOBAL_ARGS, *args]
-	result = subprocess.run(
-		cmd,
-		capture_output=True,
-		text=True,
-		timeout=120,
-		stdin=subprocess.DEVNULL,
+def _cli_timeout(args: tuple[str, ...]) -> float:
+	# A wizard deadline belongs to the child. The host allows bounded extra
+	# time for that child to commit its result/checkpoint and emit the envelope.
+	if args and args[0] == "wizard" and "--timeout" in args:
+		try:
+			requested = float(args[args.index("--timeout") + 1])
+		except (IndexError, ValueError):
+			return _CLI_TIMEOUT_SECONDS
+		if math.isfinite(requested) and requested > 0:
+			return requested + _CHECKPOINT_GRACE_SECONDS
+	return _CLI_TIMEOUT_SECONDS
+
+
+def _cli_failure(args: tuple[str, ...], code: str, message: str, **details: Any) -> dict[str, Any]:
+	command = args[0] if args else "mcp"
+	if command in {"agent", "hr", "ai", "resume", "watch", "crawl"} and len(args) > 1:
+		command = f"{command}.{args[1]}"
+	return cast(
+		"dict[str, Any]",
+		json.loads(
+			envelope_error(
+				command,
+				code=code,
+				message=message,
+				recoverable=code != "CLI_ERROR" and not details.get("outcome_unknown", False),
+				recovery_action="检查本地 checkpoint 与平台实际结果，再显式恢复；未确认的写操作不要直接重试",
+				details=details or None,
+			)
+		),
 	)
+
+
+def _parse_cli_output(args: tuple[str, ...], stdout: str, stderr: str) -> dict[str, Any]:
 	try:
-		parsed = json.loads(result.stdout)
+		parsed = json.loads(stdout)
 	except json.JSONDecodeError:
 		parsed = None
 	if isinstance(parsed, dict):
 		return parsed
 	# CLI 契约保证 stdout 是 JSON 信封对象；拿到别的形状（解析失败或非对象）
 	# 一律按命令失败处理，而不是把非 dict 结果透传给调用方。
-	return {
-		"ok": False,
-		"error": {"code": "CLI_ERROR", "message": result.stderr or "命令执行失败"},
-	}
+	return _cli_failure(args, "CLI_ERROR", stderr or "命令执行失败")
+
+
+def _run_boss(*args: str) -> dict[str, Any]:
+	"""Synchronous compatibility entrypoint; MCP handlers use the async path."""
+	cmd = [_BOSS_BIN, "--json", *_BOSS_GLOBAL_ARGS, *args]
+	try:
+		result = subprocess.run(
+			cmd,
+			capture_output=True,
+			text=True,
+			timeout=_cli_timeout(args),
+			stdin=subprocess.DEVNULL,
+		)
+	except subprocess.TimeoutExpired:
+		return _cli_failure(args, "WORKFLOW_TIMEOUT", "底层 CLI 超时", outcome_unknown=True)
+	except OSError as exc:
+		return _cli_failure(args, "CLI_ERROR", str(exc))
+	return _parse_cli_output(args, result.stdout, result.stderr)
+
+
+async def _stop_cli_process(
+	process: asyncio.subprocess.Process,
+	output: "asyncio.Task[tuple[bytes, bytes]]",
+) -> tuple[bytes, bytes]:
+	if process.returncode is None:
+		# SIGINT gives wizard/automation their normal interruption checkpoint
+		# path. Never signal the user's attached browser process.
+		try:
+			process.send_signal(signal.SIGINT)
+		except ProcessLookupError:
+			pass
+		except ValueError:
+			try:
+				process.terminate()
+			except ProcessLookupError:
+				pass
+	try:
+		return await asyncio.wait_for(asyncio.shield(output), _CHECKPOINT_GRACE_SECONDS)
+	except asyncio.TimeoutError:
+		if process.returncode is None:
+			try:
+				process.terminate()
+			except ProcessLookupError:
+				pass
+	try:
+		return await asyncio.wait_for(asyncio.shield(output), _TERMINATE_GRACE_SECONDS)
+	except asyncio.TimeoutError:
+		if process.returncode is None:
+			try:
+				process.kill()
+			except ProcessLookupError:
+				pass
+		try:
+			return await asyncio.wait_for(asyncio.shield(output), _TERMINATE_GRACE_SECONDS)
+		except asyncio.TimeoutError:
+			# An inherited pipe held by another process must not turn cleanup into
+			# an unbounded wait after the owned CLI has been killed.
+			output.cancel()
+			await asyncio.gather(output, return_exceptions=True)
+			return b"", b""
+
+
+async def _run_boss_async(*args: str) -> dict[str, Any]:
+	if args and args[0] == "wizard" and not any(flag in args for flag in ("--timeout", "--status", "--stop")):
+		args = (*args, "--timeout", str(_CLI_TIMEOUT_SECONDS))
+	cmd = [_BOSS_BIN, "--json", *_BOSS_GLOBAL_ARGS, *args]
+	spawn = asyncio.create_task(
+		asyncio.create_subprocess_exec(
+			*cmd,
+			stdout=asyncio.subprocess.PIPE,
+			stderr=asyncio.subprocess.PIPE,
+			stdin=asyncio.subprocess.DEVNULL,
+		)
+	)
+	try:
+		process = await asyncio.shield(spawn)
+	except OSError as exc:
+		return _cli_failure(args, "CLI_ERROR", str(exc))
+	except asyncio.CancelledError:
+		try:
+			process = await asyncio.shield(spawn)
+		except OSError:
+			return _cli_failure(args, "WORKFLOW_STOPPED", "MCP 调用已取消", outcome_unknown=False)
+		output = asyncio.create_task(process.communicate())
+		await asyncio.shield(_stop_cli_process(process, output))
+		return _cli_failure(args, "WORKFLOW_STOPPED", "MCP 调用已取消", outcome_unknown=True)
+	output = asyncio.create_task(process.communicate())
+	try:
+		stdout, stderr = await asyncio.wait_for(asyncio.shield(output), _cli_timeout(args))
+	except (asyncio.TimeoutError, asyncio.CancelledError) as exc:
+		stdout, _ = await asyncio.shield(_stop_cli_process(process, output))
+		code = "WORKFLOW_STOPPED" if isinstance(exc, asyncio.CancelledError) else "WORKFLOW_TIMEOUT"
+		# A child envelope can carry the committed checkpoint/run id. Preserve it
+		# inside the failure; killing a child never proves an action had no effect.
+		try:
+			checkpoint_result = json.loads(stdout)
+		except (json.JSONDecodeError, UnicodeDecodeError):
+			checkpoint_result = None
+		return _cli_failure(
+			args,
+			code,
+			"MCP 调用已取消" if code == "WORKFLOW_STOPPED" else "底层 CLI 超时",
+			outcome_unknown=True,
+			checkpoint_result=checkpoint_result if isinstance(checkpoint_result, dict) else None,
+		)
+	return _parse_cli_output(args, stdout.decode("utf-8", errors="replace"), stderr.decode("utf-8", errors="replace"))
 
 
 # ── Handler 注册（mcp 2.x） ────────────────────────────────────────
@@ -152,7 +284,7 @@ async def list_tools(ctx: Any, params: "PaginatedRequestParams | None" = None) -
 
 async def call_tool(ctx: Any, params: CallToolRequestParams) -> CallToolResult:
 	args = _build_args(params.name, dict(params.arguments or {}))
-	result = _run_boss(*args)
+	result = await _run_boss_async(*args)
 	return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False, indent=2))])
 
 

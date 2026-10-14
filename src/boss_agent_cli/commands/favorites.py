@@ -54,9 +54,11 @@ def _card_to_shortlist_item(card: dict[str, Any]) -> dict[str, Any]:
 	NOT NULL 字段（title/company/city/salary）兜底空串，防脏 card 触发 IntegrityError。
 	"""
 	labels = card.get("jobLabels")
+	lid = card.get("lid")
 	return {
 		"security_id": str(card.get("securityId") or ""),
 		"job_id": str(card.get("encryptJobId") or ""),
+		"lid": lid if isinstance(lid, str) else "",
 		"title": str(card.get("jobName", "") or ""),
 		"company": str(card.get("brandName", "") or ""),
 		"city": str(card.get("cityName", "") or ""),
@@ -69,12 +71,12 @@ def _card_to_shortlist_item(card: dict[str, Any]) -> dict[str, Any]:
 
 
 def _redact_for_display(item: dict[str, Any]) -> dict[str, Any]:
-	"""脱敏预览输出：security_id/job_id → [REDACTED]（照 export 脱敏约定，issue #354 契约）。
+	"""脱敏预览输出：security_id/job_id/lid → [REDACTED]（照 export 脱敏约定，issue #354 契约）。
 
 	list 预览不回显完整标识；sync 落库仍存完整值（用户从 shortlist list 取值喂 AI 命令）。
 	"""
 	redacted = dict(item)
-	for key in ("security_id", "job_id"):
+	for key in ("security_id", "job_id", "lid"):
 		if key in redacted:
 			redacted[key] = "[REDACTED]"
 	return redacted

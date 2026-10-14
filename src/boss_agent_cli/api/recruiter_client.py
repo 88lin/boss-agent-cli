@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 from boss_agent_cli.api import recruiter_endpoints as ep
 from boss_agent_cli.api._base_client import _BaseHttpClient
+from boss_agent_cli.api.client import PlatformRiskError
 from boss_agent_cli.api.httpx_helpers import make_client_registry
 from boss_agent_cli.api.recruiter_resume import (
 	ResumeValidationError,
@@ -22,12 +23,14 @@ from boss_agent_cli.api.recruiter_resume import (
 	history_self_message_state,
 	incoming_message,
 	message_mid,
+	message_texts,
 	new_action_cards_matching,
 	new_messages_matching,
 	resume_friend,
 	save_resume,
+	sent_by_self,
 )
-from boss_agent_cli.api.zhipin_errors import classify_code_37
+from boss_agent_cli.api.zhipin_errors import classify_code_37, raise_platform_risk_response
 
 _OPEN_CLIENTS, _close_open_clients = make_client_registry()
 
@@ -265,8 +268,9 @@ _CHAT_LIST_SNAPSHOT_JS = """
 
 _SEND_MESSAGE_ACTION_JS = """
 const escaped = escapeHtml(args.content);
-editor.disabled = false;
-editor.conversationLoading$ = false;
+if (editor.disabled || editor.conversationLoading$) {
+	return {ok: false, error: 'editor is disabled or conversation is loading', log};
+}
 editor.draft[editor.uniqueId] = args.content;
 input.innerHTML = escaped;
 log.push('editbox html set, calling sendText');
@@ -336,12 +340,12 @@ _EXCHANGE_MESSAGE_TEXTS: dict[int, tuple[str, ...]] = {
 }
 # 部分请求在聊天记录/WS 帧里是不带文案的动作卡片：body = {"type": 4, "action": {"aid": N}}。
 # 已实测：aid 37 = 求附件简历，aid 32 = 换微信请求。换手机号的 aid 还没抓到样本，
-# 先记为 None：接受任意「自己发出、动作开始后新出现、且不是已知其他类型 aid」的动作卡片。
+# 未识别的手机号 aid 保留为空集合；不能靠排除已知其他类型推断请求成功。
 _RESUME_REQUEST_AID = 37
 _WECHAT_EXCHANGE_AID = 32
 _KNOWN_ACTION_AIDS: frozenset[int] = frozenset({_RESUME_REQUEST_AID, _WECHAT_EXCHANGE_AID})
 _EXCHANGE_ACTION_AIDS: dict[int, frozenset[int] | None] = {
-	1: None,
+	1: frozenset(),
 	2: frozenset({_WECHAT_EXCHANGE_AID}),
 	4: frozenset({_RESUME_REQUEST_AID}),
 }
@@ -399,14 +403,16 @@ class BossRecruiterClient(_BaseHttpClient):
 	def _browser_request(
 		self, method: str, url: str, *, params: dict[str, Any] | None = None, data: dict[str, Any] | None = None
 	) -> dict[str, Any]:
+		self._check_cdp_risk_lock()
 		browser = self._get_browser()
-		# 与候选人侧同一把 CDP code 37 锁：stoken 未换新就不发出去。
-		self._check_cdp_risk_lock(browser)
-		result = browser.request(method, url, params=params, data=data)
+		try:
+			result = browser.request(method, url, params=params, data=data)
+		except PlatformRiskError as error:
+			self._record_cdp_risk_lock(browser, error=error)
+			raise
 		if isinstance(result, dict):
-			if result.get("code") == ep.CODE_STOKEN_EXPIRED and classify_code_37(result) == "environment_risk":
-				self._record_cdp_risk_lock(browser)
 			result.setdefault("__cli_endpoint_hint__", url)
+			self._raise_platform_risk_response(result, browser=browser)
 		return result
 
 	def _require_chat_friend_data(self, friend_id: int) -> dict[str, Any]:
@@ -415,12 +421,23 @@ class BossRecruiterClient(_BaseHttpClient):
 		BOSS 的 friend_detail 仍用 uid，而聊天页 Vue 组件期待 friendId/uniqueId。
 		把这层映射集中在一个 helper，避免 reply / exchange 各自拼字段后漂移。
 		"""
+		self._check_cdp_risk_lock()
 		fd_resp = self.friend_detail([friend_id])
+		self._raise_platform_risk_response(fd_resp)
+		if fd_resp.get("code") != 0:
+			raise LookupError("friend_detail 读取失败，未执行聊天动作")
 		friends = (fd_resp.get("zpData") or {}).get("friendList") or []
-		if not friends:
-			raise LookupError("friend_detail 未返回候选人信息（friend_id 可能无效）")
+		matches = [
+			item
+			for item in friends
+			if isinstance(item, dict)
+			and str(item.get("friendId", item.get("uid", ""))) == str(friend_id)
+			and (item.get("uid") is None or str(item["uid"]) == str(friend_id))
+		]
+		if len(matches) != 1:
+			raise LookupError("friend_detail 未返回唯一匹配的目标候选人，未执行聊天动作")
 
-		friend_data: dict[str, Any] = {**friends[0]}
+		friend_data: dict[str, Any] = {**matches[0]}
 		if "friendId" not in friend_data and "uid" in friend_data:
 			friend_data["friendId"] = friend_data["uid"]
 		friend_data["uniqueId"] = f"{friend_data['friendId']}-{friend_data.get('friendSource', 0)}"
@@ -481,44 +498,72 @@ class BossRecruiterClient(_BaseHttpClient):
 		if extra_args:
 			args.update(extra_args)
 
-		browser = self._get_browser()
-		# 聊天页动作会让页面自己发平台请求：动作前先核对 code 37 风控锁（裸 CDP 读 stoken，不附着 patchright）。
 		self._check_cdp_risk_lock_raw()
-		if listen_ms is None:
-			return browser.evaluate_js(script, args), []
+		browser = self._get_browser()
+		try:
+			if listen_ms is None:
+				return browser.evaluate_js(script, args), []
+			capture = browser.evaluate_js_with_chat_events(script, args, listen_ms=listen_ms)
+		except Exception as exc:
+			from boss_agent_cli.api.browser_client import RecruiterChatTabRequired
+			from boss_agent_cli.api.browser_source import BrowserSourceUnavailable
 
-		capture = browser.evaluate_js_with_chat_events(script, args, listen_ms=listen_ms)
+			if isinstance(exc, PlatformRiskError):
+				self._record_cdp_risk_lock_raw(error=exc)
+				raise
+			if isinstance(exc, (RecruiterChatTabRequired, BrowserSourceUnavailable)):
+				raise
+			return {"ok": False, "error": "browser action interrupted; outcome unknown",
+				"action_interrupted": True, "log": []}, []
 		result = capture.get("value") if isinstance(capture, dict) else capture
 		events = cast("list[dict[str, Any]]", capture.get("events", []) if isinstance(capture, dict) else [])
 		risk = self._page_risk_response(events)
-		if risk is not None and risk.get("code") == ep.CODE_STOKEN_EXPIRED and classify_code_37(risk) == "environment_risk":
-			self._record_cdp_risk_lock_raw()
+		if risk is not None:
+			try:
+				raise_platform_risk_response(risk, is_cdp=True)
+			except PlatformRiskError as error:
+				error.details["platform_code"] = risk.get("__cli_platform_code__", int(risk["code"]))
+				self._record_cdp_risk_lock_raw(error=error)
 		return result, events
 
 	@staticmethod
 	def _page_risk_response(events: list[dict[str, Any]]) -> dict[str, Any] | None:
-		"""页面动作期间页面请求命中的第一条风控响应（code 36/37），整理成平台响应形状。"""
+		"""页面动作期间第一条风险/访问限制响应，整理为平台响应。"""
 		for event in events:
-			if event.get("kind") == "http_risk" and event.get("code") in (ep.CODE_ACCOUNT_RISK, ep.CODE_STOKEN_EXPIRED):
-				return {"code": event["code"], "message": event.get("message") or "", "path": event.get("path")}
+			if event.get("kind") == "http_risk" and event.get("code") in (31, "31", 32, "32", 35, "35", ep.CODE_ACCOUNT_RISK, "36", ep.CODE_STOKEN_EXPIRED, "37"):
+				risk = {"code": int(event["code"]), "message": event.get("message") or "", "path": event.get("path")}
+				if event.get("message") == "官方安全验证页":
+					risk["__cli_platform_code__"] = None
+				for key in ("__cli_platform_code__", "__cli_risk_source__"):
+					if key in event:
+						risk[key] = event[key]
+				return risk
 		return None
 
 	def _page_risk_failure(self, *, action: str, friend_id: int, risk: dict[str, Any], result: Any,
 			events: list[dict[str, Any]], expected_bits: list[str], extra: dict[str, Any] | None = None) -> dict[str, Any]:
 		"""页面请求命中风控：按平台风控码返回（parse_error 映射到 ENVIRONMENT_RISK / ACCOUNT_RISK），立即停止。"""
-		message = risk.get("message") or ("访问环境存在异常" if risk["code"] == ep.CODE_STOKEN_EXPIRED else "账户存在异常行为")
+		message = risk.get("message") or ("访问环境存在异常" if risk["code"] in (31, ep.CODE_STOKEN_EXPIRED) else "账户存在异常行为")
+		observed_code = risk.get("__cli_platform_code__", risk["code"])
+		cause = f"code {observed_code}" if observed_code is not None else "官方安全/访问受限页"
 		payload = self._chat_action_failure_data(
 			action=action, friend_id=friend_id,
-			error=f"页面请求 {risk.get('path')} 返回 code {risk['code']}",
+			error=f"页面请求 {risk.get('path')} 返回 {cause}",
 			expected_bits=expected_bits, result=result, events=events, extra=extra,
 		)
-		payload["page_risk"] = {"path": risk.get("path"), "code": risk["code"]}
+		payload["page_risk"] = {"path": risk.get("path"), "code": observed_code}
 		response = self._chat_action_failure_response(
-			message=f"BOSS 直聘风控拦截 (code {risk['code']}): {message}；聊天页动作已停止，勿重试",
+			message=f"BOSS 直聘风控拦截 ({cause}): {message}；聊天页动作已停止，勿重试",
 			payload=payload,
 		)
 		response["code"] = risk["code"]
 		response["__cli_error_details__"]["page_risk"] = payload["page_risk"]
+		response["__cli_error_details__"]["risk_lock"] = {
+			"locked": True, "reason": "ENVIRONMENT_RISK" if risk["code"] in (31, "31", 37, "37") else "ACCOUNT_RISK",
+			"platform_code": risk.get("__cli_platform_code__", risk["code"]), "explicit_resume_required": True,
+		}
+		if "__cli_platform_code__" in risk:
+			response["__cli_platform_code__"] = risk["__cli_platform_code__"]
 		return response
 
 	def _matching_chat_send_events(self, events: list[dict[str, Any]], expected_bits: list[str]) -> list[dict[str, Any]]:
@@ -532,8 +577,8 @@ class BossRecruiterClient(_BaseHttpClient):
 
 	@staticmethod
 	def _exchange_aid_filter(exchange_type: int) -> tuple[frozenset[int] | None, frozenset[int]]:
-		"""返回 (aids, exclude_aids)；aid 未知的类型排除掉已知属于其他类型的 aid。"""
-		aids = _EXCHANGE_ACTION_AIDS.get(exchange_type)
+		"""返回有依据的动作 aid；未知类型为空集合，不能靠排除其他类型认定成功。"""
+		aids = _EXCHANGE_ACTION_AIDS.get(exchange_type, frozenset())
 		exclude = _KNOWN_ACTION_AIDS if aids is None else frozenset()
 		return aids, exclude
 
@@ -791,6 +836,8 @@ class BossRecruiterClient(_BaseHttpClient):
 			# 必须带参数：evaluate_js 只有 arg 不为 None 时才包成 (fn)(arg) 调用，
 			# 否则 Runtime.evaluate 拿回的是函数对象本身，快照永远为空（#456 后续实测）。
 			result = self._get_browser().evaluate_js(_CHAT_LIST_SNAPSHOT_JS, {})
+		except PlatformRiskError:
+			raise
 		except Exception:  # noqa: BLE001 — 页面快照只是增强，失败时调用方退回接口数据
 			return None
 		return result if isinstance(result, dict) and result.get("ok") else None
@@ -832,10 +879,10 @@ class BossRecruiterClient(_BaseHttpClient):
 		         → BOSS 自动调 session/bossEnter + boss/historyMsg + chat/geek/info
 		         → editor.conversation$ 切换到目标 friend
 		  3. JS: 轮询 editor.conversation$.friendId === target_friend_id（5s 超时）
-		  4. JS: editor.disabled = false + editbox.innerHTML = escaped(text)
+		  4. JS: 核对 editor 自身可发送状态 + editbox.innerHTML = escaped(text)
 		         editor.draft[uniqueId] = content; editor.sendText()
-		  5. 原始 CDP 监听 3s，必须看到真实 chat WS 帧；只出现
-		     `/message/suggest` 之类提示流量不算成功
+		  5. 原始 CDP 监听 3s记录尝试，再回读目标会话的新自己消息确认；
+		     outgoing WS 帧、draft / suggest traffic 单独不能证明服务端接受
 
 		失败验证记录（避免后人重走弯路）：
 		  - ❌ 直接调 BOSS_SEND_MESSAGE_URL (旧路径) → 121 INVALID_PARAM (端点已弃)
@@ -857,6 +904,8 @@ class BossRecruiterClient(_BaseHttpClient):
 					expected_bits=[content],
 				),
 			}
+		baseline_mids, _ = self._chat_history_snapshot(friend_id)
+		started_ms = int(time.time() * 1000)
 		result, events = self._run_chat_frontend_action(
 			friend_data=friend_data,
 			action_js=_SEND_MESSAGE_ACTION_JS,
@@ -872,7 +921,19 @@ class BossRecruiterClient(_BaseHttpClient):
 			)
 		if isinstance(result, dict) and result.get("ok"):
 			matched_ws = self._matching_chat_send_events(events, [content])
-			if matched_ws:
+			history = self._exchange_history_evidence(
+				friend_id, (content,), exchange_type=0, baseline_mids=baseline_mids, since_ms=started_ms
+			)
+			history_attempts = 1
+			for delay in self._EXCHANGE_HISTORY_RETRY_DELAYS_S:
+				if history["matched_count"]:
+					break
+				time.sleep(delay)
+				history_attempts += 1
+				history = self._exchange_history_evidence(
+					friend_id, (content,), exchange_type=0, baseline_mids=baseline_mids, since_ms=started_ms
+				)
+			if history["matched_count"]:
 				return {
 					"code": 0,
 					"message": "Success",
@@ -880,15 +941,19 @@ class BossRecruiterClient(_BaseHttpClient):
 						"friendId": friend_id,
 						"log": result.get("log"),
 						"matched_ws_count": len(matched_ws),
+						"confirmation": "history_observed",
+						"history_matched_count": history["matched_count"],
+						"history_attempts": history_attempts,
+						"recipient_delivery": "unknown",
 					},
 				}
 			# 页面脚本成功时会显式返回 error: null，setdefault 不会覆盖它。
 			if not result.get("error"):
-				result["error"] = "no confirmed chat websocket send detected"
+				result["error"] = "outgoing frame or page action does not confirm acceptance in target chat history"
 		# Surface the page-side error in CLI envelope shape
 		err_msg = self._page_error_message(result)
 		return self._chat_action_failure_response(
-			message=f"send_message_by_friend failed: {err_msg}",
+			message=f"send_message_by_friend unconfirmed: {err_msg}；{_ACTION_UNCONFIRMED_HINT.format(friend_id=friend_id)}",
 			payload=self._chat_action_failure_data(
 				action="reply",
 				friend_id=friend_id,
@@ -897,6 +962,7 @@ class BossRecruiterClient(_BaseHttpClient):
 				result=result,
 				events=events,
 			),
+			error_code="ACTION_UNCONFIRMED",
 		)
 
 	def session_enter(self, geek_id: str, expect_id: str, job_id: str, security_id: str) -> dict[str, Any]:
@@ -1052,24 +1118,31 @@ class BossRecruiterClient(_BaseHttpClient):
 					events=events,
 					extra={"exchange_type": exchange_type, "componentName": component_name},
 				),
+				error_code="ACTION_UNCONFIRMED" if isinstance(result, dict) and result.get("action_interrupted") else None,
 			)
 
 		matched_ws = self._exchange_ws_matches(events, expected_bits, exchange_type)
 		history = self._exchange_history_evidence(
-			friend_id, expected_texts, exchange_type=exchange_type, baseline_mids=baseline_mids, since_ms=started_ms,
+			friend_id,
+			expected_texts,
+			exchange_type=exchange_type,
+			baseline_mids=baseline_mids,
+			since_ms=started_ms,
 		)
 		history_attempts = 1
-		if not matched_ws:
-			# 消息落库可能晚于 WS 监听窗口：没有 WS 证据时短暂轮询聊天记录再下结论。
-			for delay in self._EXCHANGE_HISTORY_RETRY_DELAYS_S:
-				if history["matched_count"]:
-					break
-				time.sleep(delay)
-				history_attempts += 1
-				history = self._exchange_history_evidence(
-					friend_id, expected_texts, exchange_type=exchange_type,
-					baseline_mids=baseline_mids, since_ms=started_ms,
-				)
+		# outgoing 帧只证明提交尝试；即使观察到帧，也需有限回读确认目标新消息。
+		for delay in self._EXCHANGE_HISTORY_RETRY_DELAYS_S:
+			if history["matched_count"]:
+				break
+			time.sleep(delay)
+			history_attempts += 1
+			history = self._exchange_history_evidence(
+				friend_id,
+				expected_texts,
+				exchange_type=exchange_type,
+				baseline_mids=baseline_mids,
+				since_ms=started_ms,
+			)
 		side_effects = self._exchange_side_effects(exchange_type, events, history)
 		evidence = {
 			"matched_ws_count": len(matched_ws),
@@ -1077,20 +1150,22 @@ class BossRecruiterClient(_BaseHttpClient):
 			"history_attempts": history_attempts,
 			"history_matched_count": history["matched_count"],
 		}
-		if matched_ws or history["matched_count"]:
+		if history["matched_count"]:
 			data: dict[str, Any] = {
 				"friendId": friend_id,
 				"exchange_type": exchange_type,
 				"componentName": result.get("componentName"),
 				"confirmed": result.get("confirmed"),
 				"log": result.get("log"),
+				"confirmation": "history_observed",
+				"recipient_delivery": "unknown",
 				**evidence,
 			}
 			if side_effects:
 				data["side_effects"] = side_effects
 			return {"code": 0, "message": "Success", "zpData": data}
 
-		err = "页面动作已执行，但未在聊天 WS 帧或聊天记录中确认发送"
+		err = "页面动作已执行，但未在目标聊天记录中确认服务端接受"
 		if check_availability and self_message is False:
 			# 按钮看起来可用但聊天记录里没有自己的消息：信号冲突时不拦截，只在提示里点出最可能的原因。
 			err += "；聊天记录里还没有你发出的消息，{label}按钮可能尚未解锁".format(
@@ -1129,6 +1204,8 @@ class BossRecruiterClient(_BaseHttpClient):
 		mid 读不到时返回 None，事后改按时间判断；自己是否发过消息拿不准时返回 None。
 		"""
 		response = self.chat_history(friend_id, count=_HISTORY_PAGE_SIZE, retry=False)
+		if isinstance(response, dict):
+			self._raise_platform_risk_response(response)
 		if not isinstance(response, dict) or response.get("code") != 0:
 			return None, None
 		data = response.get("zpData")
@@ -1144,9 +1221,13 @@ class BossRecruiterClient(_BaseHttpClient):
 		baseline_mids: set[int] | None,
 		since_ms: int,
 	) -> dict[str, Any]:
-		"""动作后回读聊天记录，统计新出现的请求消息（文案或动作卡片）；只读、失败不抛出。"""
+		"""动作后回读聊天记录；普通失败留为未确认，风险必须立即终止。"""
 		try:
 			response = self.chat_history(friend_id, count=20, retry=False)
+			if isinstance(response, dict):
+				self._raise_platform_risk_response(response)
+		except PlatformRiskError:
+			raise
 		except Exception as exc:  # noqa: BLE001 — 写操作已发生，回读失败只能记为未确认
 			return {"checked": False, "matched_count": 0, "resume_matched_count": 0, "error": type(exc).__name__}
 		if not isinstance(response, dict) or response.get("code") != 0:
@@ -1155,18 +1236,37 @@ class BossRecruiterClient(_BaseHttpClient):
 		data = response.get("zpData")
 		aids, exclude = self._exchange_aid_filter(exchange_type)
 
-		def _new_matches(match_texts: tuple[str, ...], card_aids: frozenset[int] | None,
-				card_exclude: frozenset[int]) -> int:
+		def _new_matches(
+			match_texts: tuple[str, ...], card_aids: frozenset[int] | None, card_exclude: frozenset[int]
+		) -> int:
 			found = new_messages_matching(data, match_texts, baseline_mids=baseline_mids, since_ms=since_ms)
+			found = [
+				message
+				for message in found
+				if sent_by_self(message, friend_id) and self._history_recipient_matches(message, friend_id)
+			]
+			if exchange_type == 0:
+				found = [message for message in found if any(text in message_texts(message) for text in match_texts)]
 			found += new_action_cards_matching(
 				data, friend_id=friend_id, aids=card_aids, exclude_aids=card_exclude,
 				baseline_mids=baseline_mids, since_ms=since_ms,
 			)
+			found = [message for message in found if self._history_recipient_matches(message, friend_id)]
 			return len({id(message) for message in found})
 
 		matched_count = _new_matches(texts, aids, exclude)
 		resume_count = _new_matches(_RESUME_REQUEST_TEXTS, frozenset({_RESUME_REQUEST_AID}), frozenset())
 		return {"checked": True, "matched_count": matched_count, "resume_matched_count": resume_count}
+
+	@staticmethod
+	def _history_recipient_matches(message: dict[str, Any], friend_id: int) -> bool:
+		"""The history request is target-bound; an explicit conflicting recipient invalidates it."""
+		recipient = message.get("to")
+		if recipient is None:
+			return True
+		if not isinstance(recipient, dict):
+			return False
+		return str(recipient.get("uid", "")) == str(friend_id)
 
 	def _exchange_side_effects(
 		self, exchange_type: int, events: list[dict[str, Any]], history: dict[str, Any]

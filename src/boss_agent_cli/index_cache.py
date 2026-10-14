@@ -22,6 +22,7 @@ def save_index(data_dir: Path, jobs: list[dict[str, Any]], source: str = "search
 		entries.append({
 			"security_id": job.get("security_id", ""),
 			"job_id": job.get("job_id", ""),
+			"lid": job.get("lid", ""),
 			"title": job.get("title", ""),
 			"company": job.get("company", ""),
 			"salary": job.get("salary", ""),

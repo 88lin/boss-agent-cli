@@ -141,6 +141,8 @@ def _build_args(tool_name: str, arguments: dict[str, Any]) -> list[str]:
 			args.append("--dry-run")
 		if "limit" in arguments and arguments["limit"] is not None:
 			args.extend(["--limit", str(arguments["limit"])])
+		if arguments.get("resume"):
+			args.append("--resume")
 		return args
 
 	if name == "agent_train":
@@ -325,6 +327,8 @@ def _build_args(tool_name: str, arguments: dict[str, Any]) -> list[str]:
 
 	if name == "shortlist_add":
 		args = ["shortlist", "add", arguments["security_id"], arguments["job_id"]]
+		if arguments.get("lid"):
+			args.extend(["--lid", str(arguments["lid"])])
 		if arguments.get("tags"):
 			args.extend(["--tags", str(arguments["tags"])])
 		if arguments.get("note"):

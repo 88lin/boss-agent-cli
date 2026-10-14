@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from boss_agent_cli.api.client import PlatformRiskError
 from boss_agent_cli.automation.adapters import RecruiterAutomationPlatform
 from boss_agent_cli.automation.config import AutomationConfig
 from boss_agent_cli.automation.events import make_event
@@ -30,7 +31,7 @@ def run_automation_cycle(
 ) -> RunReport:
 	"""Run one recruiter automation cycle."""
 	state = store.read_state()
-	guard = SafetyGuard(config, state, dry_run=dry_run)
+	guard = SafetyGuard(config, state, dry_run=dry_run, store=store)
 	events: list[AutomationEvent] = []
 	if config.mode is AutomationMode.PAUSED:
 		return RunReport(
@@ -41,49 +42,45 @@ def run_automation_cycle(
 			mode=config.mode,
 		)
 
-	startup_warning = adapter.detect_safety_warning()
-	if startup_warning:
-		return _stop_for_warning(
-			store,
-			guard,
-			state,
-			platform,
-			config,
-			dry_run,
-			startup_warning,
-		)
+	try:
+		startup_warning = guard.stop_reason() or adapter.detect_safety_warning()
+		if startup_warning:
+			return _stop_for_warning(store, guard, state, platform, config, dry_run, startup_warning)
 
-	adapter.ensure_session()
-	events.extend(process_pending(adapter, store, guard, platform, dry_run))
-	refs = adapter.scan_conversations(list(config.tabs), limit or config.max_per_tab)
-	for ref in refs:
-		if ref.diagnostic:
-			event = make_event(
-				platform,
-				ref.id,
-				PlatformAction.SKIP,
-				EventStatus.STOPPED_BY_SAFETY,
-				0.0,
-				ref.diagnostic,
-			)
-			events.append(event)
-			store.append_event(event)
-			continue
-		events.append(
-			process_ref(
-				adapter,
-				store,
-				config,
-				guard,
-				state,
-				platform,
-				dry_run,
-				ref,
-			)
+		adapter.ensure_session()
+		if guard.stop_reason() is None:
+			events.extend(process_pending(adapter, store, guard, platform, dry_run, state=state))
+		if guard.stop_reason() is None:
+			refs = adapter.scan_conversations(list(config.tabs), limit or config.max_per_tab)
+			for ref in refs:
+				if guard.stop_reason() is not None:
+					break
+				if ref.diagnostic:
+					event = make_event(
+						platform,
+						ref.id,
+						PlatformAction.SKIP,
+						EventStatus.STOPPED_BY_SAFETY,
+						0.0,
+						ref.diagnostic,
+					)
+					events.append(event)
+					store.append_event(event)
+					continue
+				events.append(process_ref(adapter, store, config, guard, state, platform, dry_run, ref))
+	except PlatformRiskError as exc:
+		guard.open_circuit_breaker(exc.code)
+		store.append_event(
+			make_event(platform, "", PlatformAction.SKIP, EventStatus.CIRCUIT_BREAKER_OPEN, 0.0, exc.code)
 		)
-	store.write_state(state)
+		raise
+	except KeyboardInterrupt:
+		guard.open_circuit_breaker("execution interrupted; verify any unfinished action before resuming")
+		raise
+	finally:
+		store.write_state(state)
 	return RunReport(
-		status="OK",
+		status=EventStatus.CIRCUIT_BREAKER_OPEN.value if guard.stop_reason() is not None else "OK",
 		events=tuple(events),
 		dry_run=dry_run,
 		platform=platform,

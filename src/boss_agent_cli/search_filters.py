@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 from boss_agent_cli.api import endpoints
 from boss_agent_cli.api.client import PlatformRiskError
 from boss_agent_cli.api.models import BOSS_INTERNSHIP_RESPONSE_JOB_TYPE, JobItem, is_boss_online
+from boss_agent_cli.services.job_identity import deduplicate_job_result
 
 # ── Ordinal lookups for threshold comparisons ───────────────────────
 
@@ -808,7 +809,8 @@ def _check_details_parallel(
 	sequential: bool = False,
 	before_detail_request: Callable[[], None] | None = None,
 	detail_channel: str = "auto",
-) -> None:
+	max_matches: int | None = None,
+) -> int:
 	"""Detail check, append matched to list. cache 操作在主线程完成。
 
 	主线程先查职位描述缓存命中者跳过取详情；未命中者入线程池取详，
@@ -817,7 +819,12 @@ def _check_details_parallel(
 
 	sequential=True（--active 需要查详情时）：不开线程池，主线程逐个取详情，
 	每次真正发请求前调用 before_detail_request 做间隔（CrawlBudget 也在主线程用 sqlite）。
+	max_matches 限制本次补充的匹配数量：有目标时串行，达到目标即停止，返回实际检查数。
 	"""
+	if max_matches is not None and max_matches <= 0:
+		return 0
+	sequential = sequential or max_matches is not None
+	initial_matches = len(matched)
 	# 主线程预取缓存：命中的描述随提交一并传入 worker，避免 worker 触网。
 	# 键用 encryptJobId（跨搜索稳定）；securityId 每次搜索都变，不能做键。
 	cached_by_item = {
@@ -833,7 +840,11 @@ def _check_details_parallel(
 		logger.info(f"  详情缓存命中 {cache_hits}/{len(tasks)}，跳过对应取详情请求")
 
 	if sequential:
+		checked = 0
 		for task in tasks:
+			if max_matches is not None and len(matched) - initial_matches >= max_matches:
+				break
+			checked += 1
 			raw_item = task.raw_item
 			company = raw_item.get("brandName", "")
 			title = raw_item.get("jobName", "")
@@ -861,7 +872,7 @@ def _check_details_parallel(
 				logger.info(f"  ❌ {company} - {title}（查询失败）")
 				continue
 			_record_detail_outcome(outcome, raw_item, cache, logger, matched, stats, unknown_descs)
-		return
+		return checked
 
 	stop = threading.Event()
 	with ThreadPoolExecutor(max_workers=_WELFARE_WORKERS) as pool:
@@ -899,6 +910,7 @@ def _check_details_parallel(
 				raise
 			except Exception:
 				logger.info(f"  ❌ {company} - {title}（查询失败）")
+	return len(tasks)
 
 
 # ── Main pipeline ───────────────────────────────────────────────────
@@ -933,6 +945,7 @@ def run_search_pipeline(
 	"""
 	stats = SearchPipelineStats()
 	matched: list[dict[str, Any]] = []
+	seen_job_ids: set[str] = set()
 	unknown_descs: dict[str, int] = {}
 	active_level = resolve_active_level(active)
 	current_page = start_page
@@ -942,6 +955,7 @@ def run_search_pipeline(
 	if active_only:
 		max_pages = min(max_pages, detail_filter_max_pages(None, active_level))
 	active_target = limit or _ACTIVE_DEFAULT_TARGET
+	enrichment_target = limit or (active_target if active_only and active_level != "online" else None)
 
 	for _ in range(max_pages):
 		if limit and len(matched) >= limit:
@@ -987,16 +1001,19 @@ def run_search_pipeline(
 
 		# Phase 1: list-page prefilter
 		survivors = []
-		for raw_item in job_list:
+		for raw_item in deduplicate_job_result(job_list, seen_job_ids=seen_job_ids):
 			ok, reasons = prefilter_job(raw_item, criteria, platform_name=getattr(client, "name", None))
 			if not ok:
 				stats.jobs_prefiltered += 1
 				logger.info(f"  预筛排除: {raw_item.get('jobName', '')} ({', '.join(reasons)})")
 				continue
+			if skip_greeted and cache.is_greeted(raw_item.get("securityId", "")):
+				continue
 			survivors.append(raw_item)
 
 		# Phase 2: welfare / active filtering or direct collection
 		page_needed_detail = False
+		page_matched: list[dict[str, Any]] = []
 		if welfare_conditions or active_level:
 			need_detail: list[_DetailTask] = []
 			for raw_item in survivors:
@@ -1035,33 +1052,39 @@ def run_search_pipeline(
 				if match_results:
 					d["welfare_match"] = "✅ " + ", ".join(match_results)
 				d["match_score"] = compute_match_score(d, match_results, criteria)
-				matched.append(d)
+				page_matched.append(d)
 				stats.jobs_matched += 1
 				logger.info(f"  ✅ {item.company} - {item.title}（{'标签匹配' if match_results else '列表活跃度匹配'}）")
 
 			if need_detail:
-				page_needed_detail = True
 				reason = "标签未命中" if not active_level else "列表信息不足"
 				# CDP 模式（配置或本进程已接上 CDP Chrome）：详情只走浏览器 job_card，且不并发。
 				if detail_channel != "browser" and client_is_browser_only(client):
 					detail_channel = "browser"
 				# 有 --active 或 CDP 模式时串行 + 间隔取详情（单独或叠加 --welfare 都一样保守）
-				sequential = bool(active_level) or detail_channel == "browser"
-				logger.info(f"  {reason} {len(need_detail)} 个，{'逐个' if sequential else '并行'}查详情...")
-				before = len(matched)
-				_check_details_parallel(
-					client, cache, logger, welfare_conditions or [], criteria, need_detail, matched,
-					active_level=active_level, stats=stats, unknown_descs=unknown_descs,
-					sequential=sequential,
-					before_detail_request=before_detail_request if sequential else None,
-					detail_channel=detail_channel,
+				sequential = bool(active_level) or detail_channel == "browser" or enrichment_target is not None
+				remaining = (
+					max(0, enrichment_target - len(matched) - len(page_matched))
+					if enrichment_target is not None else None
 				)
-				stats.detail_checks += len(need_detail)
-				stats.jobs_matched += len(matched) - before
+				if remaining is None or remaining > 0:
+					logger.info(f"  {reason} {len(need_detail)} 个，{'逐个' if sequential else '并行'}查详情...")
+					before = len(page_matched)
+					checked = _check_details_parallel(
+						client, cache, logger, welfare_conditions or [], criteria, need_detail, page_matched,
+						active_level=active_level, stats=stats, unknown_descs=unknown_descs,
+						sequential=sequential,
+						before_detail_request=before_detail_request if sequential else None,
+						detail_channel=detail_channel,
+						max_matches=remaining,
+					)
+					page_needed_detail = checked > 0
+					stats.detail_checks += checked
+					stats.jobs_matched += len(page_matched) - before
 
 			# Post-filter skip_greeted for detail-matched items
 			if skip_greeted:
-				matched = [m for m in matched if not m.get("greeted", False)]
+				page_matched = [m for m in page_matched if not m.get("greeted", False)]
 		else:
 			for raw_item in survivors:
 				item = JobItem.from_api(raw_item)
@@ -1070,8 +1093,19 @@ def run_search_pipeline(
 					continue
 				d = item.to_dict()
 				d["match_score"] = compute_match_score(d, [], criteria)
-				matched.append(d)
+				page_matched.append(d)
 				stats.jobs_matched += 1
+
+		# 标签、描述缓存和网络补充均按原列表顺序输出，避免完成顺序改变编号。
+		positions = {
+			(str(item.get("encryptJobId") or ""), str(item.get("securityId") or ""), str(item.get("lid") or "")): index
+			for index, item in enumerate(survivors)
+		}
+		page_matched.sort(key=lambda item: positions.get(
+			(str(item.get("job_id") or ""), str(item.get("security_id") or ""), str(item.get("lid") or "")),
+			len(survivors),
+		))
+		matched.extend(page_matched)
 
 		has_more = platform_data.get("hasMore", False)
 		if not has_more:

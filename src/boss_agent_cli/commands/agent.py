@@ -9,6 +9,7 @@ from typing import Any
 
 import click
 
+from boss_agent_cli.api.cdp_risk_lock import UNLOCK_OPERATOR_ACTIONS, raise_if_locked
 from boss_agent_cli.automation.adapters import build_automation_adapter
 from boss_agent_cli.automation.config import automation_config_from_dict
 from boss_agent_cli.automation.events import make_event, now_iso
@@ -27,6 +28,7 @@ from boss_agent_cli.commands.crawl import _require_crawl_capabilities, _settings
 from boss_agent_cli.crawler.operations import crawl_status, import_crawl_shortlist
 from boss_agent_cli.crawler.service import CrawlService
 from boss_agent_cli.display import (
+	handle_auth_errors,
 	handle_error_output,
 	handle_output,
 	render_action_result,
@@ -50,10 +52,16 @@ def agent_group() -> None:
 	help="只演练自动化决策，不执行真实平台动作",
 )
 @click.option("--limit", default=None, type=int, help="本轮最多处理多少个会话")
+@click.option(
+	"--resume",
+	is_flag=True,
+	default=False,
+	help="已完成官方验证并核实未确认动作后，显式清除停止标志并从本地 checkpoint 恢复",
+)
 @click.pass_context
-def run_cmd(ctx: click.Context, dry_run: bool, limit: int | None) -> None:
+def run_cmd(ctx: click.Context, dry_run: bool, limit: int | None, resume: bool) -> None:
 	"""运行一轮招聘自动化。"""
-	report = _run_agent(ctx, dry_run=dry_run, limit=limit, force_mode=None)
+	report = _run_agent(ctx, dry_run=dry_run, limit=limit, force_mode=None, resume=resume)
 	handle_output(
 		ctx,
 		"agent.run",
@@ -73,6 +81,7 @@ def run_cmd(ctx: click.Context, dry_run: bool, limit: int | None) -> None:
 @click.option("--resume", "resume_name", required=True, help="用于 ai fit 的本地简历名称")
 @click.option("--limit", default=10, type=click.IntRange(min=1), show_default=True, help="按匹配分返回前 N 个职位")
 @click.pass_context
+@handle_auth_errors("agent.crawl")
 def crawl_cmd(
 	ctx: click.Context,
 	run_id: str | None,
@@ -101,6 +110,8 @@ def crawl_cmd(
 		return
 
 	data_dir = ctx.obj["data_dir"]
+	if query:
+		raise_if_locked(data_dir)
 	try:
 		with CacheStore(data_dir / "cache" / "boss_agent.db") as cache:
 			if query:
@@ -124,13 +135,17 @@ def crawl_cmd(
 				run_id = outcome.run_id
 			status = crawl_status(cache, run_id or "")
 			if status["status"] != "completed":
+				is_risk_stopped = status["status"] == "risk_stopped"
 				handle_error_output(
 					ctx,
 					"agent.crawl",
 					code="CRAWL_NOT_COMPLETED",
 					message=f"crawl run {run_id} 当前状态为 {status['status']}，不会导入不完整结果",
 					recoverable=True,
-					recovery_action=status["checkpoint"]["resume_command"],
+					recovery_action="；".join(UNLOCK_OPERATOR_ACTIONS) if is_risk_stopped else status["checkpoint"]["resume_command"],
+					hints={"operator_actions": [*UNLOCK_OPERATOR_ACTIONS,
+						f"完成人工恢复后，显式执行 {status['checkpoint']['resume_command']} 从原断点继续",
+					]} if is_risk_stopped else None,
 				)
 				return
 			imported = import_crawl_shortlist(
@@ -392,12 +407,7 @@ def control_cmd(ctx: click.Context) -> None:
 def stop_cmd(ctx: click.Context, reason: str) -> None:
 	"""打开招聘自动化熔断。"""
 	store = AutomationStore(ctx.obj["data_dir"])
-	state = store.read_state()
-	state.setdefault("autonomy", {})["circuit_breaker"] = {
-		"open": True,
-		"reason": reason,
-	}
-	store.write_state(state)
+	store.request_stop(reason)
 	handle_output(
 		ctx,
 		"agent.stop",
@@ -413,12 +423,15 @@ def _run_agent(
 	dry_run: bool,
 	limit: int | None,
 	force_mode: AutomationMode | None,
+	resume: bool = False,
 ) -> RunReport:
 	cfg = automation_config_from_dict((ctx.obj.get("config") or {}).get("automation"))
 	if force_mode is not None:
 		cfg = replace(cfg, mode=force_mode)
 	platform = ctx.obj.get("platform") or "zhipin"
 	store = AutomationStore(ctx.obj["data_dir"])
+	if resume:
+		store.resume()
 	adapter = build_automation_adapter(
 		platform,
 		data_dir=ctx.obj["data_dir"],

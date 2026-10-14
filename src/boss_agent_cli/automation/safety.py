@@ -8,6 +8,7 @@ from typing import Any
 
 from boss_agent_cli.automation.config import AutomationConfig
 from boss_agent_cli.automation.models import Decision, PlatformAction
+from boss_agent_cli.automation.storage import AutomationStore
 
 _REAL_ACTIONS = {
 	PlatformAction.SEND_QUESTIONNAIRE,
@@ -26,17 +27,38 @@ class SafetyDecision:
 class SafetyGuard:
 	"""Run-scoped action quotas and circuit-breaker checks."""
 
-	def __init__(self, config: AutomationConfig, state: dict[str, Any], *, dry_run: bool) -> None:
+	def __init__(
+		self,
+		config: AutomationConfig,
+		state: dict[str, Any],
+		*,
+		dry_run: bool,
+		store: AutomationStore | None = None,
+	) -> None:
 		self._config = config
 		self._state = state
 		self._dry_run = dry_run
+		self._store = store
 		self._run_actions = 0
 		state.setdefault("autonomy", {})
 		state.setdefault("safety", {})
 
+	def stop_reason(self) -> str | None:
+		if self._store is not None:
+			breaker = self._store.read_state().get("autonomy", {}).get("circuit_breaker", {})
+			if breaker.get("open"):
+				self._state["autonomy"]["circuit_breaker"] = breaker
+		breaker = self._state.get("autonomy", {}).get("circuit_breaker", {})
+		return str(breaker.get("reason") or "circuit breaker is open") if breaker.get("open") else None
+
+	def checkpoint(self) -> None:
+		if self._store is not None:
+			self._store.write_state(self._state)
+
 	def before_action(self, decision: Decision, warning: str = "") -> SafetyDecision:
-		if self._state.get("autonomy", {}).get("circuit_breaker", {}).get("open"):
-			return SafetyDecision(False, "circuit breaker is open", circuit_breaker=True)
+		stop = self.stop_reason()
+		if stop is not None:
+			return SafetyDecision(False, stop, circuit_breaker=True)
 		if warning:
 			return SafetyDecision(
 				False,
@@ -69,3 +91,7 @@ class SafetyGuard:
 			"reason": reason,
 			"opened_at": datetime.now(timezone.utc).isoformat(),
 		}
+		if self._store is not None:
+			if not self._store.read_stop().get("open"):
+				self._store.request_stop(reason)
+			self.checkpoint()

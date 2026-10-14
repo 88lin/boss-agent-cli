@@ -22,7 +22,7 @@ from boss_agent_cli.display import handle_output, render_next_steps
 @click.option("--all", "clean_all", is_flag=True, default=False, help="清理全部缓存（包括未过期的搜索缓存和打招呼记录）")
 @click.option("--privacy", is_flag=True, default=False, help="清理本地敏感数据（登录会话、简历、聊天快照和导出文件）")
 @click.option("--days", default=30, help="清理超过指定天数的快照和导出文件")
-@click.option("--risk-lock", "risk_lock", is_flag=True, default=False, help="手动解除 CDP code 37 风控锁（确认已在该 Chrome 页面里恢复后使用）")
+@click.option("--risk-lock", "risk_lock", is_flag=True, default=False, help="用户确认官方目标业务页恢复后显式清除 BOSS 本地风控锁；不解除服务器风险")
 @click.pass_context
 def clean_cmd(ctx: click.Context, dry_run: bool, clean_all: bool, privacy: bool, days: int, risk_lock: bool) -> None:
 	"""清理过期缓存和临时文件。"""
@@ -30,7 +30,7 @@ def clean_cmd(ctx: click.Context, dry_run: bool, clean_all: bool, privacy: bool,
 	results = []
 	total_freed = 0
 
-	# 0) CDP code 37 风控锁：显式 opt-in，只删本地锁文件，不连浏览器
+	# 0) 本地风险锁：显式 opt-in，文件名及 target 标签沿用历史协议，不连浏览器。
 	if risk_lock:
 		freed, count = _clean_path(lock_path(Path(data_dir)), dry_run=dry_run)
 		results.append({"target": "CDP 风控锁", "cleaned": count, "bytes_freed": freed})
@@ -87,9 +87,20 @@ def clean_cmd(ctx: click.Context, dry_run: bool, clean_all: bool, privacy: bool,
 		"total_bytes_freed": total_freed,
 		"total_bytes_freed_display": _format_size(total_freed),
 	}
+	if risk_lock:
+		data["risk_lock"] = {
+			"local_lock_removed": bool(results[0]["cleaned"] and not dry_run),
+			"platform_risk_status": "unverified",
+		}
 
 	hints: dict[str, list[str]] = {"next_actions": []}
-	if dry_run:
+	if risk_lock:
+		hints["operator_actions"] = [
+			"本地清锁不解除服务器风险；请确认官方目标业务页已恢复，再由用户显式恢复原任务，若再次命中风险立即停止",
+		]
+	if dry_run and risk_lock:
+		hints["operator_actions"].append("预演未解除锁；确认恢复后由用户执行 boss clean --risk-lock")
+	elif dry_run:
 		hints["next_actions"].append("boss clean — 执行实际清理")
 	elif privacy:
 		hints["next_actions"].append("boss login — 隐私清理后需要重新登录")

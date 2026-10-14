@@ -171,7 +171,6 @@ class WorkflowRunner:
 				while True:
 					try:
 						result = action(action_context, plan.inputs, action_prior)
-						control.raise_if_requested()
 						break
 					except WorkflowActionError as exc:
 						if not exc.recoverable or attempt >= max_retries:
@@ -195,6 +194,13 @@ class WorkflowRunner:
 				)
 			except WorkflowActionError as exc:
 				error = exc
+			except KeyboardInterrupt:
+				error = WorkflowActionError(
+					"WORKFLOW_STOPPED",
+					"workflow interrupted; verify any unfinished operation before starting another run",
+					recoverable=True,
+					recovery_action="检查 checkpoint 与平台实际结果，再显式创建或恢复内部任务",
+				)
 			except PlatformRiskError as exc:
 				# 风控：终止语义不能被下面的 NETWORK_ERROR 兜底反转成「重试当前 run_id」。
 				# checkpoint 照常落盘（下方 update_step/update_run），恢复只能由用户在
@@ -225,10 +231,24 @@ class WorkflowRunner:
 			else:
 				result_data = result.to_dict()
 				prior_results[step_name] = result_data
+				# A returned result confirms the action's outcome. Persist it before
+				# checking controls, so a late deadline cannot replay that effect.
 				self._store.update_step(run_id, step_name, status=result.status.value, result=result_data)
+				signal = control.poll()
+				if signal == "timeout":
+					return self._fail_controlled(
+						run_id,
+						step_name,
+						code="WORKFLOW_TIMEOUT",
+						message=f"workflow exceeded {timeout_seconds:g} seconds",
+						recovery_action=f"boss wizard --resume {run_id}",
+						preserve_result=True,
+					)
 				self._store.update_run(
 					run_id,
-					status=result.status.value
+					status=WorkflowStatus.STOPPED.value
+					if signal == "stop"
+					else result.status.value
 					if result.status == WorkflowStatus.WAITING_INPUT
 					else WorkflowStatus.RUNNING.value,
 					current_step=step_name,
@@ -236,6 +256,8 @@ class WorkflowRunner:
 				)
 				if on_event:
 					on_event("step_finished", step_name, result_data)
+				if signal == "stop":
+					return self._store.get(run_id) or {}
 				if result.status == WorkflowStatus.WAITING_INPUT:
 					return self._store.get(run_id) or {}
 				continue
@@ -244,7 +266,12 @@ class WorkflowRunner:
 			failed_status = (
 				WorkflowStatus.STOPPED.value if error.code == "WORKFLOW_STOPPED" else WorkflowStatus.FAILED.value
 			)
-			self._store.update_step(run_id, step_name, status=failed_status, error=error_data)
+			persisted = self._store.get(run_id) or {}
+			step_result = next(
+				(step.get("result") for step in persisted.get("steps", []) if step["step_name"] == step_name),
+				None,
+			)
+			self._store.update_step(run_id, step_name, status=failed_status, result=step_result, error=error_data)
 			self._store.update_run(
 				run_id,
 				status=failed_status,
@@ -298,6 +325,7 @@ class WorkflowRunner:
 		code: str,
 		message: str,
 		recovery_action: str,
+		preserve_result: bool = False,
 	) -> dict[str, Any]:
 		error = {
 			"code": code,
@@ -305,11 +333,18 @@ class WorkflowRunner:
 			"recoverable": True,
 			"recovery_action": recovery_action,
 		}
-		self._store.update_step(run_id, step_name, status=WorkflowStatus.FAILED.value, error=error)
+		if not preserve_result:
+			self._store.update_step(run_id, step_name, status=WorkflowStatus.FAILED.value, error=error)
+		stored_run = self._store.get(run_id) or {}
+		last_result = next(
+			(step.get("result") for step in stored_run.get("steps", []) if step["step_name"] == step_name),
+			None,
+		)
 		self._store.update_run(
 			run_id,
 			status=WorkflowStatus.FAILED.value,
 			current_step=step_name,
+			last_result=last_result,
 			error=error,
 		)
 		return self._store.get(run_id) or {}

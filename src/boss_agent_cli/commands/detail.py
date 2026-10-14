@@ -154,4 +154,4 @@ def _detail_via_browser(platform: Platform, security_id: str, lid: str, data_dir
 	with CacheStore(data_dir / "cache" / "boss_agent.db") as cache:
 		greeted = cache.is_greeted(security_id)
 
-	return build_job_from_card(card, security_id=security_id, greeted=greeted), None
+	return build_job_from_card(card, security_id=security_id, greeted=greeted, lid=lid), None

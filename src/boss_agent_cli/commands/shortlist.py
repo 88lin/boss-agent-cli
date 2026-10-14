@@ -34,6 +34,7 @@ def _compare_item(item: dict[str, Any]) -> dict[str, Any]:
 	return {
 		"security_id": item.get("security_id", ""),
 		"job_id": item.get("job_id", ""),
+		"lid": item.get("lid", ""),
 		"title": item.get("title", ""),
 		"company": item.get("company", ""),
 		"city": item.get("city", ""),
@@ -56,6 +57,7 @@ def shortlist_group() -> None:
 @click.option("--city", default="", help="城市")
 @click.option("--salary", default="", help="薪资")
 @click.option("--source", default="manual", help="来源，如 search/recommend/show/manual")
+@click.option("--lid", default="", help="与 security_id 同一列表项的访问上下文（可选；不推断有效期）")
 @click.option("--tags", default="", help="本地标签，逗号分隔")
 @click.option("--note", default="", help="本地备注")
 @click.pass_context
@@ -68,6 +70,7 @@ def shortlist_add_cmd(
 	city: str,
 	salary: str,
 	source: str,
+	lid: str,
 	tags: str,
 	note: str,
 ) -> None:
@@ -82,6 +85,7 @@ def shortlist_add_cmd(
 				"city": city,
 				"salary": salary,
 				"source": source,
+				"lid": lid,
 				"tags": parsed_tags,
 				"note": note,
 			}
@@ -98,6 +102,7 @@ def shortlist_add_cmd(
 			"city": city,
 			"salary": salary,
 			"source": source,
+			"lid": lid,
 			"tags": parsed_tags,
 			"note": note,
 		},

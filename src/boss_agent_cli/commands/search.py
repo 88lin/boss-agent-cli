@@ -225,6 +225,7 @@ def search_cmd(
 				logger.debug("搜索命中缓存")
 				result = json.loads(cached)
 				items = _sort_search_items(result["data"], sort_mode)
+				try_save_index(data_dir, items, source=f"search:{query}", logger=logger)
 				handle_output(
 					ctx, "search", items,
 					render=lambda data: render_job_table(data, f"search: {query}"),

@@ -24,6 +24,7 @@ from boss_agent_cli.display import (
 	risk_error_contract,
 )
 from boss_agent_cli.search_filters import SearchFilterCriteria, prefilter_platform_job_type
+from boss_agent_cli.services.job_identity import deduplicate_job_result
 
 
 @click.command("greet")
@@ -166,7 +167,7 @@ def batch_greet_cmd(ctx: click.Context, query: str, city: str | None, salary: st
 			)
 
 			candidates = []
-			for raw_item in job_list:
+			for raw_item in deduplicate_job_result(job_list):
 				matches, _ = prefilter_platform_job_type(raw_item, criteria, platform_name=platform.name)
 				if not matches:
 					continue

@@ -36,6 +36,7 @@ def show_cmd(ctx: click.Context, index: int) -> None:
 		return
 
 	security_id = job.get("security_id", "")
+	lid = job.get("lid") or ""
 	if not security_id:
 		handle_error_output(
 			ctx, "show",
@@ -47,7 +48,7 @@ def show_cmd(ctx: click.Context, index: int) -> None:
 	auth = AuthManager(data_dir, logger=logger, platform=ctx.obj.get("platform", "zhipin"))
 	with get_platform_instance(ctx, auth) as platform:
 		try:
-			raw = platform.job_card(security_id)
+			raw = platform.job_card(security_id, lid)
 		except NotImplementedError as exc:
 			handle_not_supported(ctx, "show", exc, fallback_message="当前平台不支持职位详情能力")
 			return
@@ -68,7 +69,7 @@ def show_cmd(ctx: click.Context, index: int) -> None:
 	with CacheStore(data_dir / "cache" / "boss_agent.db") as cache:
 		greeted = cache.is_greeted(security_id)
 
-	result = build_job_from_card(card, security_id=security_id, greeted=greeted)
+	result = build_job_from_card(card, security_id=security_id, greeted=greeted, lid=lid)
 	result["index"] = index
 
 	next_action = (

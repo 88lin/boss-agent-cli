@@ -3,6 +3,7 @@ from typing import TextIO
 import click
 
 from boss_agent_cli.auth.manager import AuthManager
+from boss_agent_cli.api.client import PlatformRiskError
 from boss_agent_cli.commands._login_errors import classify_login_error
 from boss_agent_cli.display import boss_command_for_ctx
 from boss_agent_cli.output import emit_error, emit_success
@@ -13,7 +14,7 @@ from boss_agent_cli.output import emit_error, emit_success
 @click.option("--cookie-source", default=None, help="指定浏览器提取 Cookie（如 chrome/firefox/edge），不指定则自动检测")
 @click.option("--cdp", is_flag=True, default=False, help="强制 CDP 模式（跳过 Cookie 提取，CDP 不可用直接报错）")
 @click.option("--force", is_flag=True, default=False, help="不复用任何既有登录态：跳过本地 Cookie 提取，CDP 下不复用已登录 context 并清掉目标平台 cookie 后重新登录")
-@click.option("--ignore-risk-lock", is_flag=True, default=False, help="CDP 风控锁（code 37）未解除时仍继续登录；不会解除锁")
+@click.option("--ignore-risk-lock", is_flag=True, default=False, help="历史兼容参数，不再跳过 BOSS 本地风控锁；恢复请由用户执行 clean --risk-lock")
 @click.option("--curl-file", type=click.File("r", encoding="utf-8"), default=None, help="从 Copy as cURL (bash) 文件导入 BOSS 登录态；- 表示标准输入")
 @click.pass_context
 def login_cmd(
@@ -59,7 +60,9 @@ def login_cmd(
 			},
 		)
 	except Exception as e:
-		if curl_file is not None:
+		if isinstance(e, PlatformRiskError):
+			emit_error("login", **classify_login_error(e, ctx))
+		elif curl_file is not None:
 			# 文件解码、解析器或网络库的异常可能包含凭据，禁止透传原异常文本。
 			emit_error(
 				"login", code="INVALID_PARAM" if isinstance(e, ValueError) else "LOGIN_CREDENTIAL_EXTRACTION_FAILED",

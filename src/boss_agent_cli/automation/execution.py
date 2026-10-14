@@ -29,13 +29,15 @@ def process_pending(
 	guard: SafetyGuard,
 	platform: str,
 	dry_run: bool,
+	*,
+	state: dict[str, Any] | None = None,
 ) -> list[AutomationEvent]:
 	actions = store.read_pending()
 	events: list[AutomationEvent] = []
-	updated: list[PendingAction] = []
-	for item in actions:
+	for index, item in enumerate(actions):
+		if guard.stop_reason() is not None:
+			break
 		if item.status != "pending":
-			updated.append(item)
 			continue
 		action = PlatformAction(item.action)
 		ref = ConversationRef(id=item.candidate_key, tab="pending")
@@ -47,11 +49,17 @@ def process_pending(
 			message=item.message,
 		)
 		if item.platform != platform:
-			updated.append(item)
 			continue
 		status, event_reason = execute_or_dry_run(adapter, guard, decision, ref, dry_run)
 		next_status = _next_pending_status(status)
-		updated.append(_pending_with_status(item, next_status))
+		actions[index] = _pending_with_status(item, next_status)
+		# Commit each confirmed queue effect before attempting another item. A
+		# later risk/error must not leave a successful action pending for replay.
+		store.write_pending(actions)
+		if state is not None and status in {EventStatus.AUTO_EXECUTED, EventStatus.DRY_RUN}:
+			prior = state.setdefault("conversations", {}).setdefault(item.candidate_key, {})
+			update_prior(prior, decision)
+		guard.checkpoint()
 		event = make_event(
 			platform,
 			item.candidate_key,
@@ -62,7 +70,6 @@ def process_pending(
 		)
 		events.append(event)
 		store.append_event(event)
-	store.write_pending(updated)
 	return events
 
 
@@ -87,11 +94,17 @@ def process_ref(
 		EventStatus.AUTO_EXECUTED,
 		EventStatus.DRY_RUN,
 	}:
-		store.append_interview_lead(candidate_key, decision.interview_time, decision.reason)
+		safety = guard.before_action(decision)
+		if safety.allowed:
+			store.append_interview_lead(candidate_key, decision.interview_time, decision.reason)
+		else:
+			status = EventStatus.CIRCUIT_BREAKER_OPEN if safety.circuit_breaker else EventStatus.STOPPED_BY_SAFETY
+			event_reason = safety.reason
 	elif status is EventStatus.AUTO_EXECUTED or status is EventStatus.DRY_RUN:
 		status, event_reason = execute_or_dry_run(adapter, guard, decision, ref, dry_run)
 		if status in {EventStatus.AUTO_EXECUTED, EventStatus.DRY_RUN}:
 			update_prior(prior, decision)
+	guard.checkpoint()
 	event = make_event(
 		platform,
 		candidate_key,
@@ -125,6 +138,9 @@ def execute_or_dry_run(
 	ref: ConversationRef,
 	dry_run: bool,
 ) -> tuple[EventStatus, str]:
+	stop = guard.stop_reason()
+	if stop is not None:
+		return EventStatus.CIRCUIT_BREAKER_OPEN, stop
 	safety = guard.before_action(decision, adapter.detect_safety_warning() or "")
 	if not safety.allowed:
 		if safety.circuit_breaker:

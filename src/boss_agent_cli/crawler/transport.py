@@ -8,8 +8,9 @@ import socket
 import time
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
+from boss_agent_cli.api.zhipin_errors import normalize_risk_code, platform_risk_page_response
 from boss_agent_cli.crawler.hooks import HookInjection, HookRegistrationError, inject_hook_profile
 
 # 兼容 search / pc 等变体；监听只作主路径，失败时退到页面内同源请求（不走 httpx）。
@@ -19,9 +20,54 @@ JOB_CARD_URL = "https://www.zhipin.com/wapi/zpgeek/job/card.json"
 JOBLIST_PATH = "/wapi/zpgeek/search/joblist.json"
 JOB_CARD_PATH = "/wapi/zpgeek/job/card.json"
 
+_CRAWL_FETCH_SCRIPT = """
+async function (path, params, timeoutMs) {
+	const controller = new AbortController();
+	let timer;
+	const deadline = new Promise((_, reject) => {
+		timer = setTimeout(() => {
+			controller.abort();
+			reject(new Error('crawl request deadline exceeded'));
+		}, timeoutMs);
+	});
+	try {
+		return await Promise.race([deadline, (async () => {
+			const query = new URLSearchParams(params || {});
+			const resp = await fetch(path + '?' + query.toString(), {
+				method: 'GET', credentials: 'include', signal: controller.signal,
+				headers: {'Accept': 'application/json, text/plain, */*'},
+			});
+			const text = await resp.text();
+			return JSON.stringify({status: resp.status, text, url: resp.url,
+				content_type: resp.headers.get('Content-Type') || ''});
+		})()]);
+	} catch (e) {
+		return JSON.stringify({status: 0, error: true, interrupted: true});
+	} finally {
+		clearTimeout(timer);
+	}
+}
+"""
+
 
 class CrawlRiskError(RuntimeError):
 	"""The platform returned a risk signal and the run must checkpoint-stop."""
+
+	def __init__(self, message: str, *, reason: str = "ACCOUNT_RISK", platform_code: int | None = None) -> None:
+		self.reason = reason
+		self.platform_code = platform_code
+		super().__init__(message)
+
+	@classmethod
+	def from_response(cls, payload: dict[str, Any]) -> "CrawlRiskError":
+		"""Carry an observed business code explicitly; never infer it from a message."""
+		classification_code = normalize_risk_code(payload.get("code"))
+		code = normalize_risk_code(payload.get("__cli_platform_code__", classification_code))
+		reason = "ENVIRONMENT_RISK" if classification_code in (31, 37) else "ACCOUNT_RISK"
+		cause = "身份资料流程" if code == 38 else "风险流程"
+		hint = "当前采集已停止并保存断点；请在官方目标业务页确认恢复后，由用户执行 boss clean --risk-lock 再显式继续。"
+		message = "访问环境受限" if code == 31 else "账号访问受限" if code == 32 else str(payload.get("message") or "")
+		return cls(f"平台返回{cause} code={code}: {message}。{hint}", reason=reason, platform_code=code)
 
 
 class CrawlTransport(Protocol):
@@ -79,6 +125,7 @@ class DrissionCrawlerSession:
 			options.set_user_data_path(str(self._profile_path))
 		# 采集浏览器与日常 Chrome 隔离；必须注入 boss login 的 Cookie，否则首页是登录 HTML。
 		self._page = ChromiumPage(options)
+		self._raise_if_platform_risk_page()
 		if not port_busy:
 			self._seed_session_cookies()
 		else:
@@ -124,6 +171,7 @@ class DrissionCrawlerSession:
 	def fetch_page(self, query: str, city_code: str, page_no: int) -> dict[str, Any]:
 		if self._page is None:
 			raise RuntimeError("Drission crawler session is not open")
+		self._raise_if_platform_risk_page()
 		# 每次拉列表前重置监听，避免附着旧窗口时吃到过期/错误响应包。
 		self._start_joblist_listener()
 		if self._started:
@@ -136,15 +184,26 @@ class DrissionCrawlerSession:
 		try:
 			packet = self._page.listen.wait(timeout=self._timeout, raise_err=False)
 			if packet is not None:
-				body = self._normalize_response_body(getattr(getattr(packet, "response", None), "body", None))
+				response = getattr(packet, "response", None)
+				body = self._normalize_response_body(getattr(response, "body", None))
 				if isinstance(body, dict):
 					self._raise_if_risk_response(body)
+				response_url = getattr(response, "url", None) or getattr(packet, "url", "")
+				page_risk = platform_risk_page_response(
+					url=response_url if isinstance(response_url, str) else "",
+					body=body if isinstance(body, str) else "",
+				)
+				if page_risk is not None:
+					raise CrawlRiskError.from_response(page_risk)
+				if getattr(response, "status", None) == 403:
+					raise CrawlRiskError("职位监听请求 HTTP 403，已停止；请在官方目标业务页确认恢复")
+				if isinstance(body, dict):
 					return body
-				listen_error = CrawlRiskError(self._non_json_risk_message(page_no, body))
+				listen_error = ValueError("职位监听响应不是 JSON 对象")
 			else:
 				listen_error = TimeoutError(f"第 {page_no} 页等待 joblist.json 超时")
-		except CrawlRiskError as exc:
-			listen_error = exc
+		except CrawlRiskError:
+			raise
 		except Exception as exc:
 			listen_error = exc
 
@@ -154,14 +213,17 @@ class DrissionCrawlerSession:
 		errors: list[str] = []
 		if listen_error is not None:
 			errors.append(str(listen_error))
+		self._raise_if_security_page()
 		try:
 			payload = self._fetch_joblist_in_page(query=query, city_code=city_code, page_no=page_no)
 			self._raise_if_risk_response(payload)
 			return payload
+		except CrawlRiskError:
+			raise
 		except Exception as page_exc:
 			errors.append(f"页面内 fetch 失败：{page_exc}")
 		self._raise_if_security_page(require_job_list=True)
-		raise CrawlRiskError("；".join(errors) if errors else f"第 {page_no} 页职位列表获取失败")
+		raise RuntimeError("；".join(errors) if errors else f"第 {page_no} 页职位列表获取失败")
 
 	def _fetch_joblist_in_page(self, *, query: str, city_code: str, page_no: int) -> dict[str, Any]:
 		"""Request joblist inside the open tab (same cookies/fingerprint as visible UI)."""
@@ -178,35 +240,17 @@ class DrissionCrawlerSession:
 	def _fetch_json_in_page(self, path: str, params: dict[str, str]) -> dict[str, Any]:
 		"""在已打开的 zhipin 页签里发同源 GET（浏览器自带 Cookie / 指纹，不经 httpx）。
 
-		Note: DrissionPage.run_async_js does NOT await promises (returns immediately),
-		so we use synchronous XHR via run_js, then CDP awaitPromise as a second try.
+		DrissionPage.run_js awaits the returned promise; run_async_js deliberately does not.
+		Both the request/body and evaluation have deadlines; synchronous XHR is avoided.
 		"""
 		if self._page is None:
 			raise RuntimeError("Drission crawler session is not open")
 
-		# 1) sync XHR — works with run_js (async fetch + run_js yields NoneType).
-		sync_script = """
-			function (path, params) {
-				const query = new URLSearchParams(params || {});
-				const xhr = new XMLHttpRequest();
-				xhr.open('GET', path + '?' + query.toString(), false);
-				xhr.withCredentials = true;
-				xhr.setRequestHeader('Accept', 'application/json, text/plain, */*');
-				try {
-					xhr.send(null);
-				} catch (e) {
-					return {status: 0, text: String(e), error: true};
-				}
-				return {status: xhr.status, text: xhr.responseText || ''};
-			}
-		"""
+		self._raise_if_security_page()
 		raw = None
 		run_js = getattr(self._page, "run_js", None)
 		if callable(run_js):
-			try:
-				raw = run_js(sync_script, path, params)
-			except Exception:
-				raw = None
+			raw = run_js(_CRAWL_FETCH_SCRIPT, path, params, self._timeout * 1000, timeout=self._timeout + 1)
 
 		# 2) CDP evaluate + awaitPromise for async fetch if sync path unavailable.
 		if raw is None:
@@ -216,24 +260,35 @@ class DrissionCrawlerSession:
 			try:
 				raw = json.loads(raw)
 			except json.JSONDecodeError as exc:
-				raise CrawlRiskError(f"页面内请求返回无法解析：{raw[:160]}") from exc
+				raise RuntimeError("页面内请求返回无法解析的传输结果") from exc
 		if not isinstance(raw, dict):
-			raise CrawlRiskError(
-				f"页面内请求返回类型异常：{type(raw).__name__}（async JS 未等待完成时常见为 None）"
-			)
+			raise RuntimeError(f"页面内请求返回类型异常：{type(raw).__name__}（async JS 未等待完成时常见为 None）")
 		status = int(raw.get("status") or 0)
 		text = str(raw.get("text") or "")
-		if raw.get("error") or status <= 0:
-			raise CrawlRiskError(f"页面内请求失败：{text[:200]}")
-		if status >= 400:
-			raise CrawlRiskError(f"页面内请求 HTTP {status}：{text[:160]}")
 		try:
 			payload = json.loads(text)
-		except json.JSONDecodeError as exc:
-			preview = text[:160].replace("\n", " ")
-			raise CrawlRiskError(f"页面内请求非 JSON：{preview}") from exc
+		except json.JSONDecodeError:
+			payload = None
+		if isinstance(payload, dict):
+			self._raise_if_risk_response(payload)
+		page_risk = platform_risk_page_response(
+			url=str(raw.get("url") or ""), content_type=str(raw.get("content_type") or ""), body=text
+		)
+		if page_risk is not None:
+			raise CrawlRiskError.from_response(page_risk)
+		if status == 403:
+			raise CrawlRiskError("页面内请求 HTTP 403，已停止；请在官方页面核对后显式恢复")
+		if raw.get("interrupted"):
+			raise TimeoutError("页面内读取请求或响应体超时")
+		if raw.get("error") or status <= 0:
+			raise RuntimeError("页面内请求失败")
+		if status >= 400:
+			raise RuntimeError(f"页面内请求 HTTP {status}")
+		if payload is None:
+			raise RuntimeError("页面内请求响应不是 JSON")
 		if not isinstance(payload, dict):
-			raise CrawlRiskError("页面内请求响应不是对象")
+			raise RuntimeError("页面内请求响应不是对象")
+		self._raise_if_risk_response(payload)
 		return payload
 
 	def _fetch_json_via_cdp_evaluate(self, path: str, params: dict[str, str]) -> dict[str, Any] | None:
@@ -243,27 +298,15 @@ class DrissionCrawlerSession:
 		run_cdp = getattr(self._page, "run_cdp", None)
 		if not callable(run_cdp):
 			return None
-		expression = f"""
-		(async () => {{
-			const params = new URLSearchParams({json.dumps(params, ensure_ascii=False)});
-			const resp = await fetch({json.dumps(path)} + '?' + params.toString(), {{
-				method: 'GET',
-				credentials: 'include',
-				headers: {{ 'Accept': 'application/json, text/plain, */*' }},
-			}});
-			const text = await resp.text();
-			return JSON.stringify({{ status: resp.status, text }});
-		}})()
-		"""
-		try:
-			result = run_cdp(
-				"Runtime.evaluate",
-				expression=expression,
-				awaitPromise=True,
-				returnByValue=True,
-			)
-		except Exception:
-			return None
+		expression = f"({_CRAWL_FETCH_SCRIPT})({json.dumps(path)}, {json.dumps(params, ensure_ascii=False)}, {self._timeout * 1000})"
+		result = run_cdp(
+			"Runtime.evaluate",
+			expression=expression,
+			awaitPromise=True,
+			returnByValue=True,
+			timeout=(self._timeout + 1) * 1000,
+			_timeout=self._timeout + 2,
+		)
 		if not isinstance(result, dict):
 			return None
 		value = (result.get("result") or {}).get("value")
@@ -321,8 +364,11 @@ class DrissionCrawlerSession:
 		# Ensure domain context before setting cookies.
 		try:
 			self._page.get("https://www.zhipin.com/")
+		except CrawlRiskError:
+			raise
 		except Exception:
 			pass
+		self._raise_if_platform_risk_page()
 		cookie_items = [
 			{
 				"name": str(name),
@@ -380,7 +426,6 @@ class DrissionCrawlerSession:
 	@staticmethod
 	def _looks_like_login(url: str, html: str) -> bool:
 		markers = (
-			"web/user",
 			"/login",
 			"扫码登录",
 			"手机号登录",
@@ -394,15 +439,16 @@ class DrissionCrawlerSession:
 	def _raise_if_security_page(self, *, require_job_list: bool = False) -> None:
 		if self._page is None:
 			return
+		self._raise_if_platform_risk_page()
 		url = str(getattr(self._page, "url", "")).lower()
 		html = str(getattr(self._page, "html", ""))[:4000].lower()
 		if self._looks_like_login(url, html):
 			raise CrawlRiskError(
-				"采集浏览器当前未登录。请先 boss login（采集会注入登录 Cookie），"
-				"或手动在采集 profile 中完成登录后再恢复。"
+				"采集浏览器当前未登录，已停止。请在官方页面完成登录并确认目标业务页恢复后，"
+				"由用户执行 boss clean --risk-lock 再显式恢复。"
 			)
-		if "zhipin-security" in url or "zhipin-security" in html:
-			raise CrawlRiskError("检测到 zhipin-security 安全页")
+		if urlsplit(url).path.rstrip("/") == "/web/user":
+			raise CrawlRiskError("采集浏览器进入身份资料流程，已停止；请在官方页面完成该流程并确认目标业务页恢复后显式继续")
 		if not require_job_list:
 			return
 		find = getattr(self._page, "ele", None)
@@ -417,15 +463,18 @@ class DrissionCrawlerSession:
 			# 页面尚未支持元素探测时保留普通超时语义，不能把探测错误误判为风险。
 			return
 
+	def _raise_if_platform_risk_page(self) -> None:
+		if self._page is None:
+			return
+		url = str(getattr(self._page, "url", ""))
+		page_risk = platform_risk_page_response(url=url)
+		if page_risk is None:
+			html = str(getattr(self._page, "html", ""))[:4000]
+			page_risk = platform_risk_page_response(url=url, content_type="text/html", body=html)
+		if page_risk is not None:
+			raise CrawlRiskError.from_response(page_risk)
+
 	@staticmethod
 	def _raise_if_risk_response(payload: dict[str, Any]) -> None:
-		code = payload.get("code")
-		if code in (37, 38):
-			message = str(payload.get("message") or "")
-			# code=37 常见文案「环境存在异常」：自动化/独立 profile 指纹问题，不等于账号被封。
-			hint = (
-				"这通常是采集浏览器环境指纹被判定异常（与账号是否被封不是一回事）。"
-				"可尝试：在保持打开的采集窗口中手动打开职位列表刷新，再点「继续采集」；"
-				"或换用日常 Chrome + 调试端口，减少独立 headless profile 特征。"
-			)
-			raise CrawlRiskError(f"平台返回风险码 code={code}: {message}。{hint}")
+		if normalize_risk_code(payload.get("code")) is not None:
+			raise CrawlRiskError.from_response(payload)

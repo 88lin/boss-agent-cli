@@ -11,6 +11,7 @@ from typing import Any
 
 import click
 
+from boss_agent_cli.api.cdp_risk_lock import UNLOCK_OPERATOR_ACTIONS, raise_if_locked
 from boss_agent_cli.api.endpoints import CITY_CODES
 from boss_agent_cli.auth.manager import AuthManager, AuthRequired
 from boss_agent_cli.cache.store import CacheStore
@@ -20,6 +21,7 @@ from boss_agent_cli.crawler.operations import crawl_results, crawl_status, impor
 from boss_agent_cli.crawler.service import CrawlService, CrawlSettings
 from boss_agent_cli.crawler.transport import DrissionCrawlerSession
 from boss_agent_cli.display import (
+	handle_auth_errors,
 	handle_error_output,
 	handle_output,
 	render_action_result,
@@ -161,6 +163,7 @@ def _transport_factory(
 
 def _run_service(ctx: click.Context, service_call: Any) -> None:
 	try:
+		raise_if_locked(Path(ctx.obj["data_dir"]))
 		seed_cookies, user_agent = _session_seed(ctx)
 		with CacheStore(ctx.obj["data_dir"] / "cache" / "boss_agent.db") as cache:
 			service = CrawlService(
@@ -200,11 +203,15 @@ def _run_service(ctx: click.Context, service_call: Any) -> None:
 			recovery_action="安装 boss-agent-cli[crawl] 并执行 boss crawl configure",
 		)
 		return
-	hints = (
-		{"next_actions": [f"boss crawl resume {outcome.run_id}"]}
-		if outcome.status != "completed"
-		else {"next_actions": ["查看 output_paths 中的 JSON、CSV 或 XLSX 结果文件"]}
-	)
+	if outcome.status == "risk_stopped":
+		hints = {"operator_actions": [
+			*UNLOCK_OPERATOR_ACTIONS,
+			f"完成人工恢复后，显式执行 boss crawl resume {outcome.run_id} 从原断点继续",
+		]}
+	elif outcome.status != "completed":
+		hints = {"next_actions": [f"boss crawl resume {outcome.run_id}"]}
+	else:
+		hints = {"next_actions": ["查看 output_paths 中的 JSON、CSV 或 XLSX 结果文件"]}
 	handle_output(
 		ctx,
 		"crawl",
@@ -222,6 +229,7 @@ def _launch_background_resume(
 	with_detail: bool = False,
 ) -> None:
 	"""Start the already-persisted task outside the MCP request process."""
+	raise_if_locked(data_dir)
 	command = [
 		sys.executable,
 		"-c",
@@ -297,6 +305,7 @@ def configure_cmd(
 @click.option("--chrome-path", default=None, type=click.Path(path_type=Path), help="覆盖配置的 chrome.exe")
 @click.option("--port", "cdp_port", default=None, type=click.IntRange(1, 65535), help="覆盖配置的调试端口")
 @click.pass_context
+@handle_auth_errors("crawl")
 def run_cmd(
 	ctx: click.Context,
 	query: str,
@@ -312,6 +321,7 @@ def run_cmd(
 	if not _require_crawl_capabilities(ctx, hook_profile):
 		ctx.exit(1)
 		return
+	raise_if_locked(Path(ctx.obj["data_dir"]))
 	try:
 		settings = _settings_from_context(
 			ctx,
@@ -341,6 +351,7 @@ def run_cmd(
 	"--hook-dir", type=click.Path(path_type=Path), default=None, help="与 screenshot-full 一起显式指定的用户脚本目录"
 )
 @click.pass_context
+@handle_auth_errors("crawl.start")
 def start_cmd(
 	ctx: click.Context,
 	query: str,
@@ -354,6 +365,7 @@ def start_cmd(
 	if not _require_crawl_capabilities(ctx, hook_profile):
 		ctx.exit(1)
 		return
+	raise_if_locked(Path(ctx.obj["data_dir"]))
 	run_id: str | None = None
 	try:
 		settings = _settings_from_context(
@@ -419,6 +431,7 @@ def start_cmd(
 @click.option("--background", is_flag=True, default=False, help="后台恢复，立即返回 run_id")
 @click.option("--from-queue", is_flag=True, default=False, hidden=True)
 @click.pass_context
+@handle_auth_errors("crawl.resume")
 def resume_cmd(
 	ctx: click.Context,
 	run_id: str,
@@ -431,6 +444,7 @@ def resume_cmd(
 	if not _require_crawl_capabilities(ctx):
 		ctx.exit(1)
 		return
+	raise_if_locked(Path(ctx.obj["data_dir"]))
 	if background:
 		try:
 			with CacheStore(ctx.obj["data_dir"] / "cache" / "boss_agent.db") as cache:
