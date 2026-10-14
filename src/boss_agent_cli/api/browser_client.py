@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 from types import TracebackType
-from typing import Any, cast
+from typing import Any, Callable, cast
 from patchright.sync_api import sync_playwright
 
 from boss_agent_cli.api import endpoints
@@ -29,6 +29,7 @@ from boss_agent_cli.api.browser_source import (
 from boss_agent_cli.api.browser_urls import DEFAULT_CDP_URL, is_zhipin_url
 from boss_agent_cli.api.endpoints_loader import EndpointSpec, endpoint_for_request
 from boss_agent_cli.api.throttle import RequestThrottle
+from boss_agent_cli.api.request_budget import RequestBudget, check_request_control, is_request_stop, retry_after_seconds
 from boss_agent_cli.api.zhipin_errors import platform_risk_page_response, raise_platform_risk_response
 
 HOME_URL = "https://www.zhipin.com/"
@@ -125,9 +126,18 @@ _FETCH_SCRIPT = r"""
 						return {code: 36, message: 'HTTP 403 forbidden; workflow stopped', zpData: {}, __cli_platform_code__: null,
 							__cli_security_response__: {url: resp.url, content_type: resp.headers.get('Content-Type') || '', title: ''}};
 					}
+					if (resp.status === 429) {
+						controller.abort();
+						return {code: 9, message: 'HTTP 429 rate limited', zpData: {},
+							__cli_rate_limit__: {retry_after: resp.headers.get('Retry-After') || ''}};
+					}
 					const body = await resp.text();
 					try {
-						return JSON.parse(body);
+						const result = JSON.parse(body);
+						if (result && (result.code === 9 || result.code === '9')) {
+							result.__cli_rate_limit__ = {retry_after: resp.headers.get('Retry-After') || ''};
+						}
+						return result;
 					} catch (e) {
 						const title = (body.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || '';
 						const restricted = /<h[1-3]\b[^>]*>\s*访问受限\s*<\/h[1-3]\s*>/i.test(body)
@@ -176,8 +186,12 @@ class BrowserSession:
 		cdp_url: str | None = None,
 		logger: Any = None,
 		browser_source: str | None = None,
+		request_budget: RequestBudget | None = None,
+		request_check: Callable[[], None] | None = None,
 	) -> None:
-		self._throttle = RequestThrottle(delay)
+		self._request_budget = request_budget
+		self._request_check = request_check
+		self._throttle = RequestThrottle(delay, check=self._check_request)
 		# patchright 对象运行时创建；注解为 Any 让 mypy 对外部依赖放行
 		self._pw: Any = None
 		self._browser: Any = None
@@ -200,6 +214,72 @@ class BrowserSession:
 		# git 干净自动合并却留下两个互不感知开关的成因（见 browser_source 模块文档）。
 		# 门禁 test_browser_session_has_exactly_one_source_selector 守住这一点。
 		self._policy: BrowserSourcePolicy = resolve_policy(browser_source)
+
+	def _check_request(self) -> None:
+		budget = getattr(self, "_request_budget", None)
+		if budget is not None:
+			budget.check_risk()
+		check = getattr(self, "_request_check", None)
+		if check is not None:
+			check()
+		self._raise_if_security_page()
+
+	def _send_fetch(self, payload: dict[str, Any], endpoint: EndpointSpec | None) -> dict[str, Any]:
+		from contextlib import nullcontext
+
+		budget = getattr(self, "_request_budget", None)
+		window = (
+			budget.attempt("browser-fetch", check=self._check_request, before_wait=self._throttle.wait)
+			if budget is not None
+			else nullcontext()
+		)
+		with window:
+			if budget is None:
+				self._throttle.wait()
+			check_request_control(self._check_request)
+			try:
+				result = self._evaluate_fetch(payload)
+			finally:
+				self._throttle.mark()
+			if isinstance(result, dict):
+				limit = result.pop("__cli_rate_limit__", None)
+				if result.get("code") in (9, "9"):
+					result["code"] = 9
+				if budget is not None and (isinstance(limit, dict) or result.get("code") in (9, "9")):
+					budget.cooldown(
+						max(
+							10.0,
+							retry_after_seconds(limit.get("retry_after") if isinstance(limit, dict) else None) or 0.0,
+						)
+					)
+				security = result.pop("__cli_security_response__", None)
+				if isinstance(security, dict):
+					page_risk = platform_risk_page_response(
+						url=str(security.get("url") or ""),
+						content_type=str(security.get("content_type") or ""),
+						body="<title>访问受限</title>"
+						if security.get("restricted") is True
+						else f"<title>{security.get('title', '')}</title>",
+					)
+					if page_risk is not None:
+						raise_platform_risk_response(page_risk, is_cdp=self._is_cdp)
+				if budget is not None:
+					raise_platform_risk_response(result, is_cdp=self._is_cdp)
+				if result.pop("__cli_request_interrupted__", False):
+					return self._interrupted_request_response(endpoint)
+			return result
+
+	def _navigate_home(self) -> None:
+		from contextlib import nullcontext
+
+		budget = getattr(self, "_request_budget", None)
+		window = (
+			budget.attempt("browser-navigation", check=self._check_request) if budget is not None else nullcontext()
+		)
+		with window:
+			check_request_control(self._check_request)
+			self._page.goto(HOME_URL, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+			self._raise_if_security_page()
 
 	def _log(self, message: str) -> None:
 		"""Diagnostic channel logs: debug by default so TTY wizard stays clean."""
@@ -372,8 +452,10 @@ class BrowserSession:
 				# CDP 模式下用较长超时 + DOM 就绪等待（commit 级返回后立即
 				# evaluate 会撞上 execution context destroyed）
 				try:
-					self._page.goto(HOME_URL, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
-				except Exception:
+					self._navigate_home()
+				except Exception as error:
+					if is_request_stop(error):
+						raise
 					# 导航超时：页面可能仍在导航、执行上下文未建立。标记未就绪，
 					# 由 request() 在 evaluate 前有界恢复，避免永久挂起（同 #390）。
 					self._page_ready = False
@@ -385,8 +467,10 @@ class BrowserSession:
 			reuse_label = "复用用户 context" if not self._own_context else "新建 context"
 			self._log(f"[boss] CDP 连接成功 ({url})，{reuse_label} + {page_label}")
 			return True
-		except Exception:
+		except Exception as error:
 			self._close_browser_quietly()
+			if is_request_stop(error):
+				raise
 			return False
 
 	def _close_browser_quietly(self) -> None:
@@ -450,10 +534,12 @@ class BrowserSession:
 			]
 		)
 		self._page = self._context.new_page()
-		self._page.goto(HOME_URL, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
+		self._navigate_home()
 		try:
 			self._page.wait_for_load_state("networkidle", timeout=_HEADLESS_NETWORKIDLE_GRACE_MS)
 		except Exception as e:
+			if is_request_stop(e):
+				raise
 			# zhipin 首页常驻请求较多，headless 模式下不一定能进入 networkidle；
 			# 页面 JS 环境已可用时，继续直接发起 fetch 请求更稳。
 			self._log(f"[boss] headless 首页未进入 networkidle（{e}），继续直接发起请求")
@@ -491,7 +577,6 @@ class BrowserSession:
 	) -> dict[str, Any]:
 		self._ensure_started()
 		self._raise_if_security_page()
-		self._throttle.wait()
 		endpoint = endpoint_for_request(method, url)
 		replay_safe = bool(endpoint is not None and endpoint.replay_safe)
 
@@ -522,7 +607,7 @@ class BrowserSession:
 			"timeoutMs": _REQUEST_TIMEOUT_MS,
 		}
 		try:
-			result = self._evaluate_fetch(payload)
+			result = self._send_fetch(payload, endpoint)
 		except Exception as exc:
 			# 复用用户页签时，用户恰好在请求那一瞬间手动导航会让执行上下文被销毁
 			# （Chromium 返回 "Execution context was destroyed"）。仅明确可重放的读取
@@ -530,13 +615,13 @@ class BrowserSession:
 			if not _is_context_destroyed_error(exc):
 				from boss_agent_cli.api.client import PlatformRiskError
 
+				if is_request_stop(exc):
+					raise
 				if not replay_safe and not isinstance(exc, PlatformRiskError):
-					self._throttle.mark()
 					return self._interrupted_request_response(endpoint)
 				raise
 			self._page_ready = False
 			if not replay_safe:
-				self._throttle.mark()
 				return self._interrupted_request_response(endpoint)
 			try:
 				self._page.wait_for_load_state("domcontentloaded", timeout=_NAV_TIMEOUT_MS)
@@ -548,19 +633,7 @@ class BrowserSession:
 				}
 			self._page_ready = True
 			self._raise_if_security_page()
-			result = self._evaluate_fetch(payload)
-
-		self._throttle.mark()
-		if isinstance(result, dict) and isinstance((security := result.pop("__cli_security_response__", None)), dict):
-			page_risk = platform_risk_page_response(
-				url=str(security.get("url") or ""),
-				content_type=str(security.get("content_type") or ""),
-				body="<title>访问受限</title>" if security.get("restricted") is True else f"<title>{security.get('title', '')}</title>",
-			)
-			if page_risk is not None:
-				raise_platform_risk_response(page_risk, is_cdp=self._is_cdp)
-		if isinstance(result, dict) and result.pop("__cli_request_interrupted__", False):
-			return self._interrupted_request_response(endpoint)
+			result = self._send_fetch(payload, endpoint)
 		return result
 
 	def _raise_if_security_page(self) -> None:
@@ -902,12 +975,21 @@ class _PageRiskResponseTracker:
 			is_business_api = is_zhipin_url(url) and urlsplit(url).path.startswith("/wapi/")
 			if is_business_api and response.get("status") == 403:
 				# 不等 loadingFinished 或正文：403 可能没有可读取的响应体。
-				self.events.append({
-					"kind": "http_risk", "path": urlsplit(url).path, "code": 36,
-					"__cli_platform_code__": None, "message": "页面接口返回 HTTP 403，当前动作已停止",
-				})
+				self.events.append(
+					{
+						"kind": "http_risk",
+						"path": urlsplit(url).path,
+						"code": 36,
+						"__cli_platform_code__": None,
+						"message": "页面接口返回 HTTP 403，当前动作已停止",
+					}
+				)
 				return None
-			if is_business_api and ("json" in mime or "html" in mime or mime in ("", "text/plain")) and isinstance(request_id, str):
+			if (
+				is_business_api
+				and ("json" in mime or "html" in mime or mime in ("", "text/plain"))
+				and isinstance(request_id, str)
+			):
 				if len(self._pending) < _MAX_TRACKED_RESPONSES:
 					self._pending[request_id] = urlsplit(url).path
 			return None
@@ -943,12 +1025,14 @@ class _PageRiskResponseTracker:
 			if isinstance(data, dict) and data.get("code") in _PAGE_RISK_CODES:
 				from boss_agent_cli.api.zhipin_errors import response_message
 
-				self.events.append({
-					"kind": "http_risk",
-					"path": path,
-					"code": int(data["code"]),
-					"message": response_message(data)[:120],
-				})
+				self.events.append(
+					{
+						"kind": "http_risk",
+						"path": path,
+						"code": int(data["code"]),
+						"message": response_message(data)[:120],
+					}
+				)
 		return None
 
 	def _record_page_risk(self, path: str, response: dict[str, Any]) -> None:

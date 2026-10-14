@@ -6,11 +6,21 @@ import random
 import time
 import uuid
 from dataclasses import dataclass, replace
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Callable
 
 from boss_agent_cli.api import cdp_risk_lock
 from boss_agent_cli.api.client import PlatformRiskError
+from boss_agent_cli.api.request_budget import (
+	RequestBudget,
+	RequestBudgetExceeded,
+	cancellable_sleep,
+	check_request_control,
+	is_request_stop,
+	request_control,
+)
 from boss_agent_cli.api.zhipin_errors import normalize_risk_code
 from boss_agent_cli.cache.store import CacheStore
 from boss_agent_cli.crawler.exporter import write_run_outputs
@@ -20,6 +30,12 @@ from boss_agent_cli.crawler.hooks import (
 )
 from boss_agent_cli.compliance import require_capability_mode
 from boss_agent_cli.crawler.transport import CrawlRiskError, CrawlTransport
+from boss_agent_cli.crawler.controls import (
+	CrawlLimitExceeded as CrawlLimitExceeded,
+	CrawlStopRequested as CrawlStopRequested,
+	CrawlWorkflowStopRequested as CrawlWorkflowStopRequested,
+	CrawlTimeoutRequested as CrawlTimeoutRequested,
+)
 
 
 @dataclass(frozen=True)
@@ -42,19 +58,28 @@ class CrawlSettings:
 
 	def as_dict(self) -> dict[str, Any]:
 		return {
-			"query": self.query, "city_code": self.city_code, "pages": self.pages, "with_detail": self.with_detail,
+			"query": self.query,
+			"city_code": self.city_code,
+			"pages": self.pages,
+			"with_detail": self.with_detail,
 			"browser": {
-				"profile_path": str(self.profile_path), "cdp_port": self.cdp_port,
-				"process_owner": "crawler", "cleanup": "quit", "port_policy": "must_be_unused",
+				"profile_path": str(self.profile_path),
+				"cdp_port": self.cdp_port,
+				"process_owner": "crawler",
+				"cleanup": "quit",
+				"port_policy": "must_be_unused",
 			},
 			"chrome_path": self.chrome_path,
 			"hook": {
-				"profile": self.hook_profile, "source": self.hook_source,
+				"profile": self.hook_profile,
+				"source": self.hook_source,
 				"directory": str(self.hook_dir) if self.hook_dir else None,
 			},
 			"limits": {
-				"max_requests": self.max_requests, "max_details": self.max_details,
-				"max_seconds": self.max_seconds, "max_retries": self.max_retries,
+				"max_requests": self.max_requests,
+				"max_details": self.max_details,
+				"max_seconds": self.max_seconds,
+				"max_retries": self.max_retries,
 			},
 			"operating_mode": self.operating_mode,
 		}
@@ -76,10 +101,17 @@ class CrawlSettings:
 		if profile_path is None or cdp_port is None or hook_profile is None:
 			raise ValueError("crawl run 缺少浏览器或 Hook 配置")
 		return cls(
-			query=str(raw["query"]), city_code=str(raw["city_code"]), pages=int(raw["pages"]),
-			with_detail=bool(raw["with_detail"]), profile_path=Path(str(profile_path)),
-			chrome_path=raw.get("chrome_path"), cdp_port=int(cdp_port), hook_profile=str(hook_profile),
-			hook_dir=Path(str(raw.get("hook_dir") or hook.get("directory"))) if raw.get("hook_dir") or hook.get("directory") else None,
+			query=str(raw["query"]),
+			city_code=str(raw["city_code"]),
+			pages=int(raw["pages"]),
+			with_detail=bool(raw["with_detail"]),
+			profile_path=Path(str(profile_path)),
+			chrome_path=raw.get("chrome_path"),
+			cdp_port=int(cdp_port),
+			hook_profile=str(hook_profile),
+			hook_dir=Path(str(raw.get("hook_dir") or hook.get("directory")))
+			if raw.get("hook_dir") or hook.get("directory")
+			else None,
 			hook_source=str(raw.get("hook_source") or hook.get("source", "user-supplied")),
 			max_requests=int(raw.get("max_requests") or limits.get("max_requests", 20)),
 			max_details=int(raw.get("max_details") or limits.get("max_details", 50)),
@@ -107,14 +139,21 @@ class CrawlOutcome:
 
 	def as_dict(self) -> dict[str, Any]:
 		result = {
-			"run_id": self.run_id, "status": self.status, "next_page": self.next_page,
-			"pages_completed": self.pages_completed, "jobs_seen": self.jobs_seen, "detail_checks": self.detail_checks,
+			"run_id": self.run_id,
+			"status": self.status,
+			"next_page": self.next_page,
+			"pages_completed": self.pages_completed,
+			"jobs_seen": self.jobs_seen,
+			"detail_checks": self.detail_checks,
 			"checkpoint": {"next_page": self.next_page, "resume_command": f"boss crawl resume {self.run_id}"},
 			"output_paths": self.output_paths,
 			"requests_attempted": self.requests_attempted,
 			"detail_requests_attempted": self.detail_requests_attempted,
 			"elapsed_seconds": self.elapsed_seconds,
-			"hooks": [{"name": item.name, "success": item.success, "sha256": item.sha256, "reason": item.reason} for item in self.hooks],
+			"hooks": [
+				{"name": item.name, "success": item.success, "sha256": item.sha256, "reason": item.reason}
+				for item in self.hooks
+			],
 			"error": self.error,
 		}
 		if self.risk_lock is not None:
@@ -123,13 +162,13 @@ class CrawlOutcome:
 
 
 class CrawlBudget:
-	"""Persistent cross-process rate budget shared by list and detail work."""
+	"""Conservative crawl pacing on top of the common cross-transport budget."""
 
 	def __init__(
 		self,
 		cache: CacheStore,
 		*,
-		sleeper: Callable[[float], None] = time.sleep,
+		sleeper: Callable[[float], None] | None = None,
 		clock: Callable[[], float] = time.time,
 		random_delay: Callable[[float, float], float] = random.uniform,
 	) -> None:
@@ -137,32 +176,22 @@ class CrawlBudget:
 		self._sleeper = sleeper
 		self._clock = clock
 		self._random_delay = random_delay
+		self._check: Callable[[], None] | None = None
+
+	def bind_check(self, check: Callable[[], None]) -> None:
+		self._check = check
 
 	def wait(self, kind: str, on_wait: Callable[[float], None] | None = None) -> None:
+		check_request_control(self._check)
 		low, high = (5.0, 10.0) if kind == "list" else (3.0, 6.0)
 		interval = self._random_delay(low, high)
 		now = self._clock()
-		remaining = self._cache.reserve_crawl_budget(f"zhipin:{kind}", now=now, interval=interval)
+		remaining = self._cache.reserve_crawl_budget("zhipin:all", now=now, interval=interval)
 		if remaining > 0:
 			if on_wait is not None:
 				on_wait(remaining)
-			self._sleeper(remaining)
-
-
-class CrawlLimitExceeded(RuntimeError):
-	"""A user-configured crawl budget has reached its hard limit."""
-
-
-class CrawlStopRequested(RuntimeError):
-	"""The user requested that the persisted task stop at its next safe point."""
-
-
-class CrawlWorkflowStopRequested(CrawlStopRequested):
-	"""The owning workflow requested cooperative stop."""
-
-
-class CrawlTimeoutRequested(CrawlStopRequested):
-	"""The owning workflow deadline expired."""
+			cancellable_sleep(remaining, check=self._check, sleeper=self._sleeper)
+		check_request_control(self._check)
 
 
 class CrawlRunBudget:
@@ -187,8 +216,7 @@ class CrawlRunBudget:
 		self.detail_requests_attempted = detail_requests_attempted
 
 	def claim_request(self, kind: str) -> None:
-		if self.elapsed_seconds >= self._settings.max_seconds:
-			raise CrawlLimitExceeded("wall-clock budget exhausted")
+		self.check_time()
 		if self.requests_attempted >= self._settings.max_requests:
 			raise CrawlLimitExceeded("request budget exhausted")
 		if kind == "detail" and self.detail_requests_attempted >= self._settings.max_details:
@@ -198,6 +226,10 @@ class CrawlRunBudget:
 			self.detail_requests_attempted += 1
 		if self._on_change is not None:
 			self._on_change(self)
+
+	def check_time(self) -> None:
+		if self.elapsed_seconds >= self._settings.max_seconds:
+			raise CrawlLimitExceeded("wall-clock budget exhausted")
 
 	@property
 	def elapsed_seconds(self) -> int:
@@ -224,6 +256,7 @@ class CrawlService:
 		self._control_probe = control_probe
 		self._on_run_created = on_run_created
 		self._unpersisted_risk_lock: cdp_risk_lock.RiskLock | None = None
+		self._request_budget = RequestBudget.for_data_dir(data_dir)
 
 	def create_and_run(self, settings: CrawlSettings) -> CrawlOutcome:
 		self._validate_settings(settings)
@@ -294,9 +327,14 @@ class CrawlService:
 		output_dir = Path(str(run["output_dir"]))
 		rows = self._cache.list_crawl_jobs(str(run["run_id"]))
 		return CrawlOutcome(
-			run_id=str(run["run_id"]), status="completed", next_page=int(run["next_page"]),
-			pages_completed=max(0, int(run["next_page"]) - 1), jobs_seen=len(rows),
-			detail_checks=0, output_paths=_output_paths(output_dir), hooks=_hook_injections(run.get("hook_results", [])),
+			run_id=str(run["run_id"]),
+			status="completed",
+			next_page=int(run["next_page"]),
+			pages_completed=max(0, int(run["next_page"]) - 1),
+			jobs_seen=len(rows),
+			detail_checks=0,
+			output_paths=_output_paths(output_dir),
+			hooks=_hook_injections(run.get("hook_results", [])),
 			requests_attempted=int(run["requests_attempted"]),
 			detail_requests_attempted=int(run["detail_requests_attempted"]),
 			elapsed_seconds=int(run["elapsed_seconds"]),
@@ -338,6 +376,17 @@ class CrawlService:
 		current_page = next_page
 		# 风控/待人工处理时保留采集 Chrome，便于用户在窗口内登录或过验证。
 		keep_browser = False
+
+		def check_attempt() -> None:
+			self._raise_if_stop_requested(run_id)
+			run_budget.check_time()
+
+		bind_check = getattr(budget, "bind_check", None)
+		if callable(bind_check):
+			bind_check(check_attempt)
+		bind_attempts = getattr(transport, "bind_attempts", None)
+		if callable(bind_attempts):
+			bind_attempts(lambda kind: self._attempt(run_id, budget, run_budget, kind), self._request_budget.cooldown)
 		try:
 			self._raise_if_stop_requested(run_id)
 			hooks = tuple(transport.open())
@@ -400,6 +449,15 @@ class CrawlService:
 		except CrawlLimitExceeded as exc:
 			status = "budget_stopped"
 			error = str(exc)
+		except RequestBudgetExceeded as exc:
+			status = (
+				"timeout_stopped"
+				if exc.code == "WORKFLOW_TIMEOUT"
+				else "workflow_stopped"
+				if exc.code == "WORKFLOW_STOPPED"
+				else "budget_stopped"
+			)
+			error = str(exc)
 		except CrawlTimeoutRequested as exc:
 			status = "timeout_stopped"
 			error = str(exc)
@@ -409,38 +467,55 @@ class CrawlService:
 		except CrawlStopRequested as exc:
 			status = "stopped"
 			error = str(exc)
+		except KeyboardInterrupt:
+			status = "stopped"
+			error = "execution interrupted; verify any unfinished operation before explicitly resuming"
+			raise
 		except Exception as exc:
 			status = "stopped"
 			error = str(exc)
 		finally:
-			close = getattr(transport, "close", None)
-			if callable(close):
-				try:
-					close(quit_browser=not keep_browser)
-				except TypeError:
-					# 旧 transport / 测试假对象可能不接受关键字参数。
-					close()
+			# Save progress before cleanup: a detached browser can fail to close.
 			self._cache.update_crawl_run_budget(
 				run_id,
 				requests_attempted=run_budget.requests_attempted,
 				detail_requests_attempted=run_budget.detail_requests_attempted,
 				elapsed_seconds=run_budget.elapsed_seconds,
 			)
+			self._cache.update_crawl_run(
+				run_id,
+				status=status,
+				next_page=current_page,
+				error=error,
+				list_finished=list_finished,
+				hook_results=_hook_metadata(hooks),
+			)
+			close = getattr(transport, "close", None)
+			if callable(close):
+				try:
+					try:
+						close(quit_browser=not keep_browser)
+					except TypeError:
+						# 旧 transport / 测试假对象可能不接受关键字参数。
+						close()
+				except Exception as close_error:
+					if status == "completed":
+						status = "stopped"
+					error = f"{error}; browser cleanup failed ({type(close_error).__name__})".lstrip("; ")
+					self._cache.update_crawl_run(run_id, status=status, next_page=current_page, error=error)
 
-		self._cache.update_crawl_run(
-			run_id,
-			status=status,
-			next_page=current_page,
-			error=error,
-			list_finished=list_finished,
-			hook_results=_hook_metadata(hooks),
-		)
 		rows = [item["payload"] for item in self._cache.list_crawl_jobs(run_id)]
 		paths = write_run_outputs(output_dir, rows)
 		return CrawlOutcome(
-			run_id=run_id, status=status, next_page=current_page, pages_completed=max(0, current_page - 1),
-			jobs_seen=len(rows), detail_checks=detail_checks,
-			output_paths=paths, hooks=hooks, error=error,
+			run_id=run_id,
+			status=status,
+			next_page=current_page,
+			pages_completed=max(0, current_page - 1),
+			jobs_seen=len(rows),
+			detail_checks=detail_checks,
+			output_paths=paths,
+			hooks=hooks,
+			error=error,
 			requests_attempted=run_budget.requests_attempted,
 			detail_requests_attempted=run_budget.detail_requests_attempted,
 			elapsed_seconds=run_budget.elapsed_seconds,
@@ -451,21 +526,45 @@ class CrawlService:
 		if self._unpersisted_risk_lock is not None:
 			raise PlatformRiskError.from_lock(self._unpersisted_risk_lock)
 		cdp_risk_lock.raise_if_locked(self._data_dir)
+		self._request_budget.check_risk()
 
 	def _record_risk_lock(self, error: CrawlRiskError) -> dict[str, Any]:
 		lock = cdp_risk_lock.RiskLock(
-			stoken_sha256=None, locked_at=time.time(), reason=error.reason, platform_code=error.platform_code,
+			stoken_sha256=None,
+			locked_at=time.time(),
+			reason=error.reason,
+			platform_code=error.platform_code,
 		)
 		persisted = True
 		try:
-			lock = cdp_risk_lock.write_lock(
-				self._data_dir, None, now=lock.locked_at, reason=lock.reason, platform_code=lock.platform_code,
-			)
+			self._request_budget.record_risk(reason=lock.reason, platform_code=lock.platform_code)
 			self._unpersisted_risk_lock = None
 		except OSError:
 			self._unpersisted_risk_lock = lock
 			persisted = False
 		return {**PlatformRiskError.from_lock(lock).details["risk_lock"], "persisted": persisted}
+
+	@contextmanager
+	def _attempt(self, run_id: str, budget: CrawlBudget, run_budget: CrawlRunBudget, kind: str) -> Iterator[None]:
+		category = "detail" if kind.startswith("detail") else "list"
+
+		def check() -> None:
+			self._raise_if_stop_requested(run_id)
+			run_budget.check_time()
+
+		with request_control(check=check):
+			with self._request_budget.attempt(
+				f"crawl-{kind}",
+				check=check,
+				before_wait=lambda: budget.wait(category),
+				claim=lambda: run_budget.claim_request(category),
+			):
+				try:
+					yield
+				except CrawlRiskError as error:
+					# Persist before releasing the shared lease; another process sees the lock.
+					self._record_risk_lock(error)
+					raise
 
 	def _complete_pending_details(
 		self,
@@ -497,10 +596,15 @@ class CrawlService:
 
 				detail = self._with_retry(fetch_detail, max_retries=settings.max_retries)
 				card = _unwrap_card(detail)
-				row.update({
-					"post_description": card.get("postDescription", ""), "address": card.get("address", ""),
-					"boss_name": card.get("bossName", ""), "boss_title": card.get("bossTitle", ""), "detail_status": "fetched",
-				})
+				row.update(
+					{
+						"post_description": card.get("postDescription", ""),
+						"address": card.get("address", ""),
+						"boss_name": card.get("bossName", ""),
+						"boss_title": card.get("bossTitle", ""),
+						"detail_status": "fetched",
+					}
+				)
 				self._cache.put_job_desc(job_id, str(row["post_description"]))
 			self._cache.put_crawl_job(run_id, item["job_key"], int(item["page_no"]), row, detail_done=True)
 		return checks
@@ -514,6 +618,8 @@ class CrawlService:
 			except (PlatformRiskError, CrawlRiskError, CrawlLimitExceeded, CrawlStopRequested):
 				raise
 			except Exception as exc:
+				if is_request_stop(exc):
+					raise
 				last_error = exc
 		if last_error is None:
 			raise RuntimeError("crawl operation failed")
@@ -529,13 +635,16 @@ class CrawlService:
 		page_no: int,
 	) -> dict[str, Any]:
 		self._raise_if_stop_requested(run_id)
-		budget.wait("list")
+		window = (
+			nullcontext()
+			if callable(getattr(transport, "bind_attempts", None))
+			else self._attempt(run_id, budget, run_budget, "list")
+		)
+		with window:
+			payload = transport.fetch_page(settings.query, settings.city_code, page_no)
+			if normalize_risk_code(payload.get("code")) is not None:
+				raise CrawlRiskError.from_response(payload)
 		self._raise_if_stop_requested(run_id)
-		run_budget.claim_request("list")
-		payload = transport.fetch_page(settings.query, settings.city_code, page_no)
-		self._raise_if_stop_requested(run_id)
-		if normalize_risk_code(payload.get("code")) is not None:
-			raise CrawlRiskError.from_response(payload)
 		if payload.get("code") not in (None, 0):
 			raise RuntimeError(f"第 {page_no} 页接口错误 code={payload.get('code')}: {payload.get('message', '')}")
 		return payload
@@ -549,13 +658,16 @@ class CrawlService:
 		security_id: str,
 	) -> dict[str, Any]:
 		self._raise_if_stop_requested(run_id)
-		budget.wait("detail")
+		window = (
+			nullcontext()
+			if callable(getattr(transport, "bind_attempts", None))
+			else self._attempt(run_id, budget, run_budget, "detail")
+		)
+		with window:
+			payload = transport.fetch_detail(security_id)
+			if normalize_risk_code(payload.get("code")) is not None:
+				raise CrawlRiskError.from_response(payload)
 		self._raise_if_stop_requested(run_id)
-		run_budget.claim_request("detail")
-		payload = transport.fetch_detail(security_id)
-		self._raise_if_stop_requested(run_id)
-		if normalize_risk_code(payload.get("code")) is not None:
-			raise CrawlRiskError.from_response(payload)
 		if payload.get("code") not in (None, 0):
 			raise RuntimeError(f"职位详情接口错误 code={payload.get('code')}: {payload.get('message', '')}")
 		return payload
@@ -594,16 +706,29 @@ def _normalize_job(raw: dict[str, Any], query: str, page_no: int, rank: int) -> 
 	labels = raw.get("jobLabels", [])
 	benefits = raw.get("welfareList", [])
 	return job_key, {
-		"query": query, "page": page_no, "rank": rank, "job_id": job_id, "security_id": security_id,
+		"query": query,
+		"page": page_no,
+		"rank": rank,
+		"job_id": job_id,
+		"security_id": security_id,
 		"lid": str(raw.get("lid") or ""),
-		"title": raw.get("jobName", ""), "salary": raw.get("salaryDesc", ""), "city": raw.get("cityName", ""),
-		"district": raw.get("areaDistrict", ""), "business_district": raw.get("businessDistrict", ""),
-		"company": raw.get("brandName", ""), "company_scale": raw.get("brandScaleName", ""),
-		"industry": raw.get("brandIndustry", ""), "education": raw.get("jobDegree", ""),
-		"experience": raw.get("jobExperience", ""), "labels": "、".join(labels) if isinstance(labels, list) else str(labels or ""),
+		"title": raw.get("jobName", ""),
+		"salary": raw.get("salaryDesc", ""),
+		"city": raw.get("cityName", ""),
+		"district": raw.get("areaDistrict", ""),
+		"business_district": raw.get("businessDistrict", ""),
+		"company": raw.get("brandName", ""),
+		"company_scale": raw.get("brandScaleName", ""),
+		"industry": raw.get("brandIndustry", ""),
+		"education": raw.get("jobDegree", ""),
+		"experience": raw.get("jobExperience", ""),
+		"labels": "、".join(labels) if isinstance(labels, list) else str(labels or ""),
 		"benefits": "、".join(benefits) if isinstance(benefits, list) else str(benefits or ""),
-		"post_description": "", "address": "", "boss_name": raw.get("bossName", ""),
-		"boss_title": raw.get("bossTitle", ""), "detail_status": "not_requested",
+		"post_description": "",
+		"address": "",
+		"boss_name": raw.get("bossName", ""),
+		"boss_title": raw.get("bossTitle", ""),
+		"detail_status": "not_requested",
 	}
 
 
@@ -617,8 +742,7 @@ def _unwrap_card(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _hook_metadata(hooks: tuple[HookInjection, ...]) -> list[dict[str, Any]]:
 	return [
-		{"name": item.name, "success": item.success, "sha256": item.sha256, "reason": item.reason}
-		for item in hooks
+		{"name": item.name, "success": item.success, "sha256": item.sha256, "reason": item.reason} for item in hooks
 	]
 
 

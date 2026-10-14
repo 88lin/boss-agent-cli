@@ -14,15 +14,24 @@ from rich.table import Table
 
 from boss_agent_cli import display
 from boss_agent_cli.api.cdp_risk_lock import lock_path
+from boss_agent_cli.api.request_budget import budget_directory
 from boss_agent_cli.display import handle_output, render_next_steps
 
 
 @click.command("clean")
 @click.option("--dry-run", is_flag=True, default=False, help="仅预览将清理的内容，不实际删除")
-@click.option("--all", "clean_all", is_flag=True, default=False, help="清理全部缓存（包括未过期的搜索缓存和打招呼记录）")
+@click.option(
+	"--all", "clean_all", is_flag=True, default=False, help="清理全部缓存（包括未过期的搜索缓存和打招呼记录）"
+)
 @click.option("--privacy", is_flag=True, default=False, help="清理本地敏感数据（登录会话、简历、聊天快照和导出文件）")
 @click.option("--days", default=30, help="清理超过指定天数的快照和导出文件")
-@click.option("--risk-lock", "risk_lock", is_flag=True, default=False, help="用户确认官方目标业务页恢复后显式清除 BOSS 本地风控锁；不解除服务器风险")
+@click.option(
+	"--risk-lock",
+	"risk_lock",
+	is_flag=True,
+	default=False,
+	help="用户确认官方目标业务页恢复后显式清除 BOSS 本地风控锁；不解除服务器风险",
+)
 @click.pass_context
 def clean_cmd(ctx: click.Context, dry_run: bool, clean_all: bool, privacy: bool, days: int, risk_lock: bool) -> None:
 	"""清理过期缓存和临时文件。"""
@@ -32,7 +41,12 @@ def clean_cmd(ctx: click.Context, dry_run: bool, clean_all: bool, privacy: bool,
 
 	# 0) 本地风险锁：显式 opt-in，文件名及 target 标签沿用历史协议，不连浏览器。
 	if risk_lock:
-		freed, count = _clean_path(lock_path(Path(data_dir)), dry_run=dry_run)
+		directories = dict.fromkeys((Path(data_dir).resolve(), budget_directory(Path(data_dir))))
+		freed, count = 0, 0
+		for directory in directories:
+			removed_bytes, removed_count = _clean_path(lock_path(directory), dry_run=dry_run)
+			freed += removed_bytes
+			count += removed_count
 		results.append({"target": "CDP 风控锁", "cleaned": count, "bytes_freed": freed})
 		total_freed += freed
 

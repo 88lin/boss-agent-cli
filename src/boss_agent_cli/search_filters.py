@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 from boss_agent_cli.api import endpoints
 from boss_agent_cli.api.client import PlatformRiskError
+from boss_agent_cli.api.request_budget import RequestBudgetExceeded, is_request_stop, request_control, request_controls_active
 from boss_agent_cli.api.models import BOSS_INTERNSHIP_RESPONSE_JOB_TYPE, JobItem, is_boss_online
 from boss_agent_cli.services.job_identity import deduplicate_job_result
 
@@ -739,10 +740,18 @@ def _fetch_and_check_guarded(
 	"""
 	if stop.is_set():
 		return _DetailOutcome()
+	def check_stopped() -> None:
+		if stop.is_set():
+			raise RequestBudgetExceeded("detail batch stopped before dispatch", code="WORKFLOW_STOPPED")
 	try:
-		return _fetch_and_check(client, welfare_conditions, criteria, raw_item, cached_desc, **kwargs)
+		with request_control(check=check_stopped):
+			return _fetch_and_check(client, welfare_conditions, criteria, raw_item, cached_desc, **kwargs)
 	except (SearchPipelinePlatformError, PlatformRiskError):
 		stop.set()
+		raise
+	except Exception as error:
+		if is_request_stop(error):
+			stop.set()
 		raise
 
 
@@ -823,7 +832,9 @@ def _check_details_parallel(
 	"""
 	if max_matches is not None and max_matches <= 0:
 		return 0
-	sequential = sequential or max_matches is not None
+	# Workflow controls may read the main thread's SQLite checkpoint. Keep those
+	# operations sequential rather than moving that connection into a worker.
+	sequential = sequential or max_matches is not None or request_controls_active()
 	initial_matches = len(matched)
 	# 主线程预取缓存：命中的描述随提交一并传入 worker，避免 worker 触网。
 	# 键用 encryptJobId（跨搜索稳定）；securityId 每次搜索都变，不能做键。
@@ -868,7 +879,9 @@ def _check_details_parallel(
 					stats.detail_requests += 1
 				logger.info(f"  ❌ {company} - {title}（平台风控，停止扫描）")
 				raise
-			except Exception:
+			except Exception as error:
+				if is_request_stop(error):
+					raise
 				logger.info(f"  ❌ {company} - {title}（查询失败）")
 				continue
 			_record_detail_outcome(outcome, raw_item, cache, logger, matched, stats, unknown_descs)
@@ -908,7 +921,11 @@ def _check_details_parallel(
 				stop.set()
 				pool.shutdown(wait=False, cancel_futures=True)
 				raise
-			except Exception:
+			except Exception as error:
+				if is_request_stop(error):
+					stop.set()
+					pool.shutdown(wait=False, cancel_futures=True)
+					raise
 				logger.info(f"  ❌ {company} - {title}（查询失败）")
 	return len(tasks)
 

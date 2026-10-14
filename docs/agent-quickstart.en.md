@@ -118,6 +118,7 @@ Common recovery actions:
 - Code `37` permits bounded refresh only when credential semantics and explicit expiry or session-expiration semantics appear together. A bare token name, invalid-token wording or a security-verification requirement stops the workflow; security and environmental-risk wording takes precedence over expiry wording
 - `wt2` present but `stoken` missing: treat it as partial auth; start Chrome with a CDP debugging port and run `boss login --cdp`, or run `boss login` again
 - `RATE_LIMITED`: declared replay-safe reads can use bounded cooldowns; verify write outcomes first
+- `REQUEST_BUDGET_EXHAUSTED`: the shared lease, rolling 60-second budget or cooldown exceeded this acquisition's wait limit; the current operation was not sent. Keep the checkpoint, inspect concurrency and `retry_after_seconds`, then explicitly resume without automatic retries or unlocking. A common `data_dir` shares limits by default; `request_budget_dir` explicitly groups directories. See [shared budget settings](commands.en.md#shared-request-budget-and-cooldown). Interrupted confirmation after a write remains `ACTION_UNCONFIRMED`; verify the outcome first
 - `NOT_SUPPORTED`: switch to a platform or workflow goal reported as available by schema
 - `WORKFLOW_TIMEOUT`: a normal wizard timeout retains its `run_id`; adjust the deadline and explicitly run `boss wizard --resume <run_id>`. If MCP reports `outcome_unknown=true`, verify unconfirmed actions before retrying
 - `INVALID_PARAM`: correct the input parameters, such as city, welfare filters, or page number

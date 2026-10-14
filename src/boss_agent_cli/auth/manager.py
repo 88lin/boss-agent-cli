@@ -87,6 +87,13 @@ class AuthManager:
 			self._unpersisted_risk_lock = None
 		except OSError:
 			pass
+		from boss_agent_cli.api.request_budget import budget_directory
+		root = budget_directory(self._data_dir)
+		if root != self._data_dir.resolve():
+			try:
+				cdp_risk_lock.write_lock(root, None, now=lock.locked_at, reason=lock.reason, platform_code=lock.platform_code)
+			except OSError:
+				self._unpersisted_risk_lock = lock
 		if error is not None:
 			error.details["risk_lock"] = {
 				"locked": True, "reason": lock.reason, "platform_code": lock.platform_code,
@@ -102,6 +109,11 @@ class AuthManager:
 		lock = cdp_risk_lock.read_lock(self._data_dir) or self._unpersisted_risk_lock
 		if lock is not None:
 			raise PlatformRiskError.from_lock(lock)
+		from boss_agent_cli.api.request_budget import budget_directory, check_request_control
+		root = budget_directory(self._data_dir)
+		if root != self._data_dir.resolve():
+			cdp_risk_lock.raise_if_locked(root)
+		check_request_control()
 
 	def _login_action(self) -> str:
 		return "boss login" if self._platform == "zhipin" else f"boss --platform {self._platform} login"

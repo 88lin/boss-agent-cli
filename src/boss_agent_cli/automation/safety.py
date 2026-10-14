@@ -9,6 +9,7 @@ from typing import Any
 from boss_agent_cli.automation.config import AutomationConfig
 from boss_agent_cli.automation.models import Decision, PlatformAction
 from boss_agent_cli.automation.storage import AutomationStore
+from boss_agent_cli.api.request_budget import RequestBudgetExceeded
 
 _REAL_ACTIONS = {
 	PlatformAction.SEND_QUESTIONNAIRE,
@@ -54,6 +55,11 @@ class SafetyGuard:
 	def checkpoint(self) -> None:
 		if self._store is not None:
 			self._store.write_state(self._state)
+
+	def raise_if_stopped(self) -> None:
+		reason = self.stop_reason()
+		if reason is not None:
+			raise RequestBudgetExceeded(reason, code="WORKFLOW_STOPPED")
 
 	def before_action(self, decision: Decision, warning: str = "") -> SafetyDecision:
 		stop = self.stop_reason()

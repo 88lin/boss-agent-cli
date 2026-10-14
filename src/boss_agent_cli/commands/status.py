@@ -2,7 +2,7 @@ from pathlib import Path
 
 import click
 
-from boss_agent_cli.api.cdp_risk_lock import lock_status
+from boss_agent_cli.api.request_budget import risk_lock_status as lock_status
 from boss_agent_cli.auth.health import assess_auth_health
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.commands._platform import get_platform_instance

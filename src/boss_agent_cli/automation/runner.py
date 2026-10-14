@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from boss_agent_cli.api.client import PlatformRiskError
+from boss_agent_cli.api.request_budget import RequestBudgetExceeded, request_control
 from boss_agent_cli.automation.adapters import RecruiterAutomationPlatform
 from boss_agent_cli.automation.config import AutomationConfig
 from boss_agent_cli.automation.events import make_event
@@ -47,27 +48,28 @@ def run_automation_cycle(
 		if startup_warning:
 			return _stop_for_warning(store, guard, state, platform, config, dry_run, startup_warning)
 
-		adapter.ensure_session()
-		if guard.stop_reason() is None:
-			events.extend(process_pending(adapter, store, guard, platform, dry_run, state=state))
-		if guard.stop_reason() is None:
-			refs = adapter.scan_conversations(list(config.tabs), limit or config.max_per_tab)
-			for ref in refs:
-				if guard.stop_reason() is not None:
-					break
-				if ref.diagnostic:
-					event = make_event(
-						platform,
-						ref.id,
-						PlatformAction.SKIP,
-						EventStatus.STOPPED_BY_SAFETY,
-						0.0,
-						ref.diagnostic,
-					)
-					events.append(event)
-					store.append_event(event)
-					continue
-				events.append(process_ref(adapter, store, config, guard, state, platform, dry_run, ref))
+		with request_control(check=guard.raise_if_stopped):
+			adapter.ensure_session()
+			if guard.stop_reason() is None:
+				events.extend(process_pending(adapter, store, guard, platform, dry_run, state=state))
+			if guard.stop_reason() is None:
+				refs = adapter.scan_conversations(list(config.tabs), limit or config.max_per_tab)
+				for ref in refs:
+					if guard.stop_reason() is not None:
+						break
+					if ref.diagnostic:
+						event = make_event(
+							platform,
+							ref.id,
+							PlatformAction.SKIP,
+							EventStatus.STOPPED_BY_SAFETY,
+							0.0,
+							ref.diagnostic,
+						)
+						events.append(event)
+						store.append_event(event)
+						continue
+					events.append(process_ref(adapter, store, config, guard, state, platform, dry_run, ref))
 	except PlatformRiskError as exc:
 		guard.open_circuit_breaker(exc.code)
 		store.append_event(
@@ -76,6 +78,12 @@ def run_automation_cycle(
 		raise
 	except KeyboardInterrupt:
 		guard.open_circuit_breaker("execution interrupted; verify any unfinished action before resuming")
+		raise
+	except RequestBudgetExceeded as exc:
+		guard.open_circuit_breaker(exc.code)
+		store.append_event(
+			make_event(platform, "", PlatformAction.SKIP, EventStatus.CIRCUIT_BREAKER_OPEN, 0.0, exc.code)
+		)
 		raise
 	finally:
 		store.write_state(state)

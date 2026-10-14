@@ -240,6 +240,33 @@ boss config set platform zhipin
 boss --platform zhipin config set platform zhipin
 ```
 
+### 共享请求预算与冷却
+
+同一 `data_dir` 的 CLI、Python 客户端、MCP 子进程与 crawl 共用本地执行锁和滑动 60 秒预算。一次主动操作持锁至响应分类结束；失败尝试与允许的只读重放也消耗预算。进程退出释放执行锁，但不重置预算、冷却或平台风险锁。
+
+| 配置项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `request_delay` | `[1.5, 3.0]` | 实例内间隔范围；高斯采样限制在该范围，额外停顿仍可能延长间隔 |
+| `request_max_per_minute` | `20` | 共享滑动 60 秒窗口内的主动操作上限，必须为正整数 |
+| `request_wait_timeout` | `30.0` | 每次申请执行锁、节流、预算和冷却的总等待上限（秒）；workflow 截止时间更早时优先停止 |
+| `request_budget_dir` | `null` | 默认使用当前 `data_dir`；绝对路径可将多个数据目录显式加入同一预算组 |
+
+如多个本地任务需要共用一组限制，可先配置组目录，再将成员指向它：
+
+```bash
+boss --data-dir /path/to/request-group config set request_max_per_minute 20
+boss --data-dir /path/to/account-a config set request_budget_dir /path/to/request-group
+boss --data-dir /path/to/account-b config set request_budget_dir /path/to/request-group
+```
+
+显式预算组采用组目录 `config.json` 中的上限和等待时限，发送间隔不低于组的 `request_delay` 下限。组内共享风险阻断，但登录态仍保存在各自目录。`status` / `doctor` 展示有效风险状态；确认目标业务页恢复后，由用户执行的 `clean --risk-lock` 清理当前目录及预算组的风险锁，`--dry-run` 不清锁，预算与冷却数据库保留。
+
+HTTP `429` 或业务 code `9` 会保存共享冷却，支持 `Retry-After` 的整数秒数或 HTTP 日期；无效或缺失值使用有界退避。等待期间和实际发送前重新检查风险、停止与超时。申请失败返回七键错误信封 `REQUEST_BUDGET_EXHAUSTED`，`error.details.request_sent=false` 只表示本次主动操作未发出；可能附带 `retry_after_seconds`。保留 checkpoint，处理冷却或并发任务后显式恢复，不循环重试或清除风险锁。若写操作已经发出、确认回读才因预算或停止中断，结果保持 `ACTION_UNCONFIRMED`，通过 `confirmation_stop` 说明原因，先核对实际结果。
+
+计量覆盖接入预算的 HTTP dispatch、浏览器 fetch / 首页导航 / 招聘者前端动作、附件下载，以及 crawl 的导航、分页动作、页面 fetch 和 CDP fallback；不同尝试分别计数。这是主动操作预算：一个页面动作可能产生多条网站请求，浏览器自主资源、轮询、自动重定向和认证启动内部请求未逐包计量，也不会按公网 IP 自动发现或合并其他进程。该机制限制本地负载，不保证平台接受访问，也不解除平台封禁。
+
+`--delay`、`request_delay` 和 `batch_greet_delay` 必须是有限数值且满足 `0 <= 下限 <= 上限`；非法预算配置返回 `INVALID_PARAM`，不会写入配置文件。已有非法配置仍可通过 `config set/reset` 修复。
+
 ## 搜索筛选参数详解
 
 ```bash

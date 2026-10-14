@@ -614,6 +614,7 @@ def handle_auth_errors(command_name: str) -> Callable[[Callable[..., Any]], Call
 			from boss_agent_cli.api._base_client import BrowserChannelRequired
 			from boss_agent_cli.api.browser_source import BrowserSourceUnavailable, BrowserSourceUnsupported
 			from boss_agent_cli.api.client import PlatformRiskError
+			from boss_agent_cli.api.request_budget import RequestBudgetExceeded
 			from boss_agent_cli.auth.manager import AuthRequired, TokenRefreshFailed
 
 			try:
@@ -711,6 +712,18 @@ def handle_auth_errors(command_name: str) -> Callable[[Callable[..., Any]], Call
 					recovery_action=recovery_action,
 					details=e.details or None,
 					hints=hints or None,
+				)
+			except RequestBudgetExceeded as e:
+				budget_recoverable, budget_recovery = error_contract_for_code(e.code)
+				handle_error_output(
+					ctx,
+					command_name,
+					code=e.code,
+					message=str(e),
+					recoverable=budget_recoverable,
+					recovery_action=budget_recovery,
+					details=e.details,
+					hints={"operator_actions": ["等待冷却并检查并发任务；确认后显式恢复，不自动清理风险锁"]},
 				)
 			except Exception as e:
 				handle_error_output(

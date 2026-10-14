@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 from boss_agent_cli.api import recruiter_endpoints as ep
 from boss_agent_cli.api._base_client import _BaseHttpClient
+from boss_agent_cli.api.request_budget import cancellable_sleep, check_request_control, is_request_stop, retry_after_seconds
 from boss_agent_cli.api.client import PlatformRiskError
 from boss_agent_cli.api.httpx_helpers import make_client_registry
 from boss_agent_cli.api.recruiter_resume import (
@@ -455,6 +456,29 @@ class BossRecruiterClient(_BaseHttpClient):
 		extra_args: dict[str, Any] | None = None,
 		listen_ms: int | None = None,
 	) -> tuple[Any, list[dict[str, Any]]]:
+		with self._request_window("browser-action"):
+			try:
+				return self._run_chat_frontend_action_unpaced(
+					friend_data=friend_data,
+					action_js=action_js,
+					require_security_id=require_security_id,
+					settle_ms=settle_ms,
+					extra_args=extra_args,
+					listen_ms=listen_ms,
+				)
+			finally:
+				self._throttle.mark()
+
+	def _run_chat_frontend_action_unpaced(
+		self,
+		*,
+		friend_data: dict[str, Any],
+		action_js: str,
+		require_security_id: bool,
+		settle_ms: int,
+		extra_args: dict[str, Any] | None = None,
+		listen_ms: int | None = None,
+	) -> tuple[Any, list[dict[str, Any]]]:
 		"""Run a Vue-mediated action in the recruiter's existing chat tab.
 
 		reply / request-resume / exchange 都依赖同一段前置动作：
@@ -484,8 +508,7 @@ class BossRecruiterClient(_BaseHttpClient):
 			}
 		"""
 		script = (
-			template
-			.replace("__HELPERS__", _CHAT_FRONTEND_HELPERS_JS)
+			template.replace("__HELPERS__", _CHAT_FRONTEND_HELPERS_JS)
 			.replace("__REQUIRE_SECURITY_ID__", "true" if require_security_id else "false")
 			.replace("__ACTION__", action_js)
 		)
@@ -507,14 +530,21 @@ class BossRecruiterClient(_BaseHttpClient):
 		except Exception as exc:
 			from boss_agent_cli.api.browser_client import RecruiterChatTabRequired
 			from boss_agent_cli.api.browser_source import BrowserSourceUnavailable
+			from boss_agent_cli.api.request_budget import is_request_stop
 
 			if isinstance(exc, PlatformRiskError):
 				self._record_cdp_risk_lock_raw(error=exc)
 				raise
 			if isinstance(exc, (RecruiterChatTabRequired, BrowserSourceUnavailable)):
 				raise
-			return {"ok": False, "error": "browser action interrupted; outcome unknown",
-				"action_interrupted": True, "log": []}, []
+			if is_request_stop(exc):
+				raise
+			return {
+				"ok": False,
+				"error": "browser action interrupted; outcome unknown",
+				"action_interrupted": True,
+				"log": [],
+			}, []
 		result = capture.get("value") if isinstance(capture, dict) else capture
 		events = cast("list[dict[str, Any]]", capture.get("events", []) if isinstance(capture, dict) else [])
 		risk = self._page_risk_response(events)
@@ -530,7 +560,18 @@ class BossRecruiterClient(_BaseHttpClient):
 	def _page_risk_response(events: list[dict[str, Any]]) -> dict[str, Any] | None:
 		"""页面动作期间第一条风险/访问限制响应，整理为平台响应。"""
 		for event in events:
-			if event.get("kind") == "http_risk" and event.get("code") in (31, "31", 32, "32", 35, "35", ep.CODE_ACCOUNT_RISK, "36", ep.CODE_STOKEN_EXPIRED, "37"):
+			if event.get("kind") == "http_risk" and event.get("code") in (
+				31,
+				"31",
+				32,
+				"32",
+				35,
+				"35",
+				ep.CODE_ACCOUNT_RISK,
+				"36",
+				ep.CODE_STOKEN_EXPIRED,
+				"37",
+			):
 				risk = {"code": int(event["code"]), "message": event.get("message") or "", "path": event.get("path")}
 				if event.get("message") == "官方安全验证页":
 					risk["__cli_platform_code__"] = None
@@ -540,16 +581,31 @@ class BossRecruiterClient(_BaseHttpClient):
 				return risk
 		return None
 
-	def _page_risk_failure(self, *, action: str, friend_id: int, risk: dict[str, Any], result: Any,
-			events: list[dict[str, Any]], expected_bits: list[str], extra: dict[str, Any] | None = None) -> dict[str, Any]:
+	def _page_risk_failure(
+		self,
+		*,
+		action: str,
+		friend_id: int,
+		risk: dict[str, Any],
+		result: Any,
+		events: list[dict[str, Any]],
+		expected_bits: list[str],
+		extra: dict[str, Any] | None = None,
+	) -> dict[str, Any]:
 		"""页面请求命中风控：按平台风控码返回（parse_error 映射到 ENVIRONMENT_RISK / ACCOUNT_RISK），立即停止。"""
-		message = risk.get("message") or ("访问环境存在异常" if risk["code"] in (31, ep.CODE_STOKEN_EXPIRED) else "账户存在异常行为")
+		message = risk.get("message") or (
+			"访问环境存在异常" if risk["code"] in (31, ep.CODE_STOKEN_EXPIRED) else "账户存在异常行为"
+		)
 		observed_code = risk.get("__cli_platform_code__", risk["code"])
 		cause = f"code {observed_code}" if observed_code is not None else "官方安全/访问受限页"
 		payload = self._chat_action_failure_data(
-			action=action, friend_id=friend_id,
+			action=action,
+			friend_id=friend_id,
 			error=f"页面请求 {risk.get('path')} 返回 {cause}",
-			expected_bits=expected_bits, result=result, events=events, extra=extra,
+			expected_bits=expected_bits,
+			result=result,
+			events=events,
+			extra=extra,
 		)
 		payload["page_risk"] = {"path": risk.get("path"), "code": observed_code}
 		response = self._chat_action_failure_response(
@@ -559,14 +615,18 @@ class BossRecruiterClient(_BaseHttpClient):
 		response["code"] = risk["code"]
 		response["__cli_error_details__"]["page_risk"] = payload["page_risk"]
 		response["__cli_error_details__"]["risk_lock"] = {
-			"locked": True, "reason": "ENVIRONMENT_RISK" if risk["code"] in (31, "31", 37, "37") else "ACCOUNT_RISK",
-			"platform_code": risk.get("__cli_platform_code__", risk["code"]), "explicit_resume_required": True,
+			"locked": True,
+			"reason": "ENVIRONMENT_RISK" if risk["code"] in (31, "31", 37, "37") else "ACCOUNT_RISK",
+			"platform_code": risk.get("__cli_platform_code__", risk["code"]),
+			"explicit_resume_required": True,
 		}
 		if "__cli_platform_code__" in risk:
 			response["__cli_platform_code__"] = risk["__cli_platform_code__"]
 		return response
 
-	def _matching_chat_send_events(self, events: list[dict[str, Any]], expected_bits: list[str]) -> list[dict[str, Any]]:
+	def _matching_chat_send_events(
+		self, events: list[dict[str, Any]], expected_bits: list[str]
+	) -> list[dict[str, Any]]:
 		return [
 			event
 			for event in events
@@ -632,7 +692,7 @@ class BossRecruiterClient(_BaseHttpClient):
 			"ws_evidence": self._chat_ws_evidence(events or [], expected_bits),
 		}
 		if isinstance(result, dict):
-			for key in ("confirmed", "componentName"):
+			for key in ("confirmed", "componentName", "confirmation_stop"):
 				if key in result:
 					payload[key] = result[key]
 		if extra:
@@ -653,9 +713,24 @@ class BossRecruiterClient(_BaseHttpClient):
 		"""聊天页写操作失败信封：zpData 保留完整诊断，同时作为 error.details 透出。"""
 		details = {
 			key: payload[key]
-			for key in ("action", "error", "log", "confirmed", "componentName", "exchange_type", "ws_evidence",
-				"history_checked", "history_matched_count", "history_attempts", "history_error", "side_effects",
-				"availability", "availability_signals", "history_self_message")
+			for key in (
+				"action",
+				"error",
+				"log",
+				"confirmed",
+				"componentName",
+				"exchange_type",
+				"ws_evidence",
+				"history_checked",
+				"history_matched_count",
+				"history_attempts",
+				"history_error",
+				"side_effects",
+				"availability",
+				"availability_signals",
+				"history_self_message",
+				"confirmation_stop",
+			)
 			if key in payload
 		}
 		response: dict[str, Any] = {
@@ -838,7 +913,9 @@ class BossRecruiterClient(_BaseHttpClient):
 			result = self._get_browser().evaluate_js(_CHAT_LIST_SNAPSHOT_JS, {})
 		except PlatformRiskError:
 			raise
-		except Exception:  # noqa: BLE001 — 页面快照只是增强，失败时调用方退回接口数据
+		except Exception as error:  # noqa: BLE001 — 页面快照只是增强，失败时调用方退回接口数据
+			if is_request_stop(error):
+				raise
 			return None
 		return result if isinstance(result, dict) and result.get("ok") else None
 
@@ -850,7 +927,9 @@ class BossRecruiterClient(_BaseHttpClient):
 		data = {"friendIds": ",".join(str(i) for i in friend_ids), "src": src}
 		return self._request("POST", ep.BOSS_LAST_MESSAGES_URL, data=data)
 
-	def chat_history(self, gid: int, *, count: int = 20, max_msg_id: int | None = None, retry: bool = True) -> dict[str, Any]:
+	def chat_history(
+		self, gid: int, *, count: int = 20, max_msg_id: int | None = None, retry: bool = True
+	) -> dict[str, Any]:
 		params: dict[str, Any] = {"gid": gid, "c": count, "src": 0}
 		if max_msg_id:
 			params["maxMsgId"] = max_msg_id
@@ -917,7 +996,12 @@ class BossRecruiterClient(_BaseHttpClient):
 
 		if (risk := self._page_risk_response(events)) is not None:
 			return self._page_risk_failure(
-				action="reply", friend_id=friend_id, risk=risk, result=result, events=events, expected_bits=[content],
+				action="reply",
+				friend_id=friend_id,
+				risk=risk,
+				result=result,
+				events=events,
+				expected_bits=[content],
 			)
 		if isinstance(result, dict) and result.get("ok"):
 			matched_ws = self._matching_chat_send_events(events, [content])
@@ -926,9 +1010,15 @@ class BossRecruiterClient(_BaseHttpClient):
 			)
 			history_attempts = 1
 			for delay in self._EXCHANGE_HISTORY_RETRY_DELAYS_S:
-				if history["matched_count"]:
+				if history["matched_count"] or history.get("control_stop"):
 					break
-				time.sleep(delay)
+				try:
+					cancellable_sleep(delay, check=self._check_cdp_risk_lock)
+				except Exception as error:
+					if not is_request_stop(error) or isinstance(error, PlatformRiskError):
+						raise
+					history["control_stop"] = getattr(error, "code", "WORKFLOW_STOPPED")
+					break
 				history_attempts += 1
 				history = self._exchange_history_evidence(
 					friend_id, (content,), exchange_type=0, baseline_mids=baseline_mids, since_ms=started_ms
@@ -950,6 +1040,8 @@ class BossRecruiterClient(_BaseHttpClient):
 			# 页面脚本成功时会显式返回 error: null，setdefault 不会覆盖它。
 			if not result.get("error"):
 				result["error"] = "outgoing frame or page action does not confirm acceptance in target chat history"
+			if history.get("control_stop"):
+				result["confirmation_stop"] = history["control_stop"]
 		# Surface the page-side error in CLI envelope shape
 		err_msg = self._page_error_message(result)
 		return self._chat_action_failure_response(
@@ -984,7 +1076,9 @@ class BossRecruiterClient(_BaseHttpClient):
 
 	def job_detail(self, enc_job_id: str) -> dict[str, Any]:
 		params = {"encJobId": enc_job_id, "lid": "", "encAtsJobId": ""}
-		referer = f"{ep.BASE_URL}/web/frame/job/edit?jobversion=9921&encryptId={enc_job_id}&jobCreateSource=0&enterSource=6"
+		referer = (
+			f"{ep.BASE_URL}/web/frame/job/edit?jobversion=9921&encryptId={enc_job_id}&jobCreateSource=0&enterSource=6"
+		)
 		return self._request("GET", ep.BOSS_JOB_EDIT_URL, params=params, extra_headers={"Referer": referer})
 
 	# ── 交换联系方式（手机/微信/简历）─────────────────────
@@ -1078,14 +1172,20 @@ class BossRecruiterClient(_BaseHttpClient):
 
 		if (risk := self._page_risk_response(events)) is not None:
 			return self._page_risk_failure(
-				action="exchange", friend_id=friend_id, risk=risk, result=result, events=events,
-				expected_bits=expected_bits, extra={"exchange_type": exchange_type, "componentName": component_name},
+				action="exchange",
+				friend_id=friend_id,
+				risk=risk,
+				result=result,
+				events=events,
+				expected_bits=expected_bits,
+				extra={"exchange_type": exchange_type, "componentName": component_name},
 			)
 		if isinstance(result, dict) and result.get("unavailable") and check_availability:
 			# 按钮未解锁：handleExChange 没有被调用，什么都没发出去，可以放心先回复再重试。
 			return self._chat_action_failure_response(
 				message=_EXCHANGE_NOT_AVAILABLE_MESSAGE.format(
-					label=_EXCHANGE_TYPE_LABELS[exchange_type], friend_id=friend_id,
+					label=_EXCHANGE_TYPE_LABELS[exchange_type],
+					friend_id=friend_id,
 				),
 				payload=self._chat_action_failure_data(
 					action="exchange",
@@ -1118,7 +1218,9 @@ class BossRecruiterClient(_BaseHttpClient):
 					events=events,
 					extra={"exchange_type": exchange_type, "componentName": component_name},
 				),
-				error_code="ACTION_UNCONFIRMED" if isinstance(result, dict) and result.get("action_interrupted") else None,
+				error_code="ACTION_UNCONFIRMED"
+				if isinstance(result, dict) and result.get("action_interrupted")
+				else None,
 			)
 
 		matched_ws = self._exchange_ws_matches(events, expected_bits, exchange_type)
@@ -1132,9 +1234,15 @@ class BossRecruiterClient(_BaseHttpClient):
 		history_attempts = 1
 		# outgoing 帧只证明提交尝试；即使观察到帧，也需有限回读确认目标新消息。
 		for delay in self._EXCHANGE_HISTORY_RETRY_DELAYS_S:
-			if history["matched_count"]:
+			if history["matched_count"] or history.get("control_stop"):
 				break
-			time.sleep(delay)
+			try:
+				cancellable_sleep(delay, check=self._check_cdp_risk_lock)
+			except Exception as error:
+				if not is_request_stop(error) or isinstance(error, PlatformRiskError):
+					raise
+				history["control_stop"] = getattr(error, "code", "WORKFLOW_STOPPED")
+				break
 			history_attempts += 1
 			history = self._exchange_history_evidence(
 				friend_id,
@@ -1182,6 +1290,8 @@ class BossRecruiterClient(_BaseHttpClient):
 			extra["history_self_message"] = self_message
 		if history.get("error"):
 			extra["history_error"] = history["error"]
+		if history.get("control_stop"):
+			extra["confirmation_stop"] = history["control_stop"]
 		if side_effects:
 			extra["side_effects"] = side_effects
 		return self._chat_action_failure_response(
@@ -1229,10 +1339,18 @@ class BossRecruiterClient(_BaseHttpClient):
 		except PlatformRiskError:
 			raise
 		except Exception as exc:  # noqa: BLE001 — 写操作已发生，回读失败只能记为未确认
+			if is_request_stop(exc):
+				return {"checked": False, "matched_count": 0, "resume_matched_count": 0,
+					"control_stop": getattr(exc, "code", "WORKFLOW_STOPPED"), "error": type(exc).__name__}
 			return {"checked": False, "matched_count": 0, "resume_matched_count": 0, "error": type(exc).__name__}
 		if not isinstance(response, dict) or response.get("code") != 0:
 			code = response.get("code") if isinstance(response, dict) else None
-			return {"checked": False, "matched_count": 0, "resume_matched_count": 0, "error": f"chat_history code={code}"}
+			return {
+				"checked": False,
+				"matched_count": 0,
+				"resume_matched_count": 0,
+				"error": f"chat_history code={code}",
+			}
 		data = response.get("zpData")
 		aids, exclude = self._exchange_aid_filter(exchange_type)
 
@@ -1248,8 +1366,12 @@ class BossRecruiterClient(_BaseHttpClient):
 			if exchange_type == 0:
 				found = [message for message in found if any(text in message_texts(message) for text in match_texts)]
 			found += new_action_cards_matching(
-				data, friend_id=friend_id, aids=card_aids, exclude_aids=card_exclude,
-				baseline_mids=baseline_mids, since_ms=since_ms,
+				data,
+				friend_id=friend_id,
+				aids=card_aids,
+				exclude_aids=card_exclude,
+				baseline_mids=baseline_mids,
+				since_ms=since_ms,
 			)
 			found = [message for message in found if self._history_recipient_matches(message, friend_id)]
 			return len({id(message) for message in found})
@@ -1274,8 +1396,9 @@ class BossRecruiterClient(_BaseHttpClient):
 		"""换手机/微信时如果同时出现了求简历消息，明确告诉调用方（#443）。"""
 		if exchange_type == 4:
 			return []
-		resume_ws = self._matching_chat_send_events(events, list(_RESUME_REQUEST_TEXTS)) or \
-			self._matching_action_card_events(events, frozenset({_RESUME_REQUEST_AID}))
+		resume_ws = self._matching_chat_send_events(
+			events, list(_RESUME_REQUEST_TEXTS)
+		) or self._matching_action_card_events(events, frozenset({_RESUME_REQUEST_AID}))
 		if resume_ws or history.get("resume_matched_count"):
 			return ["resume_request_detected"]
 		return []
@@ -1305,7 +1428,8 @@ class BossRecruiterClient(_BaseHttpClient):
 		if not isinstance(friend.get("securityId"), str) or not friend["securityId"]:
 			raise ResumeValidationError("无法取得指定候选人的当前会话 securityId")
 		return self._request(
-			"POST", ep.BOSS_EXCHANGE_ACCEPT_URL,
+			"POST",
+			ep.BOSS_EXCHANGE_ACCEPT_URL,
 			data={"mid": message_id, "type": _RESUME_ACCEPT_TYPE, "securityId": friend["securityId"]},
 			retry=False,
 			follow_redirects=False,
@@ -1329,22 +1453,41 @@ class BossRecruiterClient(_BaseHttpClient):
 		geek_id = friend.get("encryptUid")
 		if not isinstance(geek_id, str) or not geek_id or geek_id in (".", ".."):
 			raise ResumeValidationError("当前会话缺少候选人的 encryptUid")
-		check = self._request("GET", ep.BOSS_RESUME_PREVIEW_CHECK_URL, params={"geekId": geek_id, **params}, retry=False, follow_redirects=False)
+		check = self._request(
+			"GET",
+			ep.BOSS_RESUME_PREVIEW_CHECK_URL,
+			params={"geekId": geek_id, **params},
+			retry=False,
+			follow_redirects=False,
+		)
 		if check.get("code") != 0:
 			return check
 		detail = check.get("zpData")
-		if not isinstance(detail, dict) or detail.get("isResumeVisible") is not True or detail.get("expired") not in (None, False, 0):
+		if (
+			not isinstance(detail, dict)
+			or detail.get("isResumeVisible") is not True
+			or detail.get("expired") not in (None, False, 0)
+		):
 			raise ResumeValidationError("附件不可访问或已过期，请在官方页面核对")
 		# isCanPreview=false 仅表示无法在线预览，网页仍允许下载原附件。
 		if isinstance(detail.get("d"), str) and detail["d"]:
 			params["d"] = detail["d"]
 		url = ep.BOSS_RESUME_DOWNLOAD_URL + quote(geek_id, safe="")
-		self._throttle.wait()
-		try:
-			with self._get_client().stream("GET", url, params=params, headers={"Referer": ep.WEB_BOSS_CHAT}, follow_redirects=False) as response:
-				file_data = save_resume(response, output)
-		finally:
-			self._throttle.mark()
+		with self._request_window("download"):
+			client = self._get_client()
+			check_request_control(self._check_cdp_risk_lock)
+			try:
+				with client.stream(
+					"GET", url, params=params, headers={"Referer": ep.WEB_BOSS_CHAT}, follow_redirects=False
+				) as response:
+					if response.status_code == 429:
+						budget = getattr(self, "_request_budget", None)
+						if budget is not None:
+							budget.cooldown(max(10.0, retry_after_seconds(response.headers.get("retry-after")) or 0.0))
+						return {"code": ep.CODE_RATE_LIMITED, "message": "附件下载请求频率受限", "zpData": {}}
+					file_data = save_resume(response, output)
+			finally:
+				self._throttle.mark()
 		return {"code": 0, "zpData": file_data}
 
 	def exchange_content(self, uid: int) -> dict[str, Any]:

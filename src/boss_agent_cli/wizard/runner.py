@@ -10,6 +10,7 @@ from typing import Any
 
 from boss_agent_cli.api.browser_source import BrowserSourceUnavailable, BrowserSourceUnsupported
 from boss_agent_cli.api.client import PlatformRiskError
+from boss_agent_cli.api.request_budget import RequestBudgetExceeded, request_control
 from boss_agent_cli.auth.manager import AuthRequired, TokenRefreshFailed
 from boss_agent_cli.display import error_contract_for_code, risk_error_contract
 from boss_agent_cli.wizard.models import StepResult, WorkflowPlan, WorkflowStatus
@@ -27,19 +28,24 @@ class WorkflowActionError(Exception):
 		*,
 		recoverable: bool = False,
 		recovery_action: str | None = None,
+		details: dict[str, Any] | None = None,
 	) -> None:
 		super().__init__(message)
 		self.code = code
 		self.recoverable = recoverable
 		self.recovery_action = recovery_action
+		self.details = details
 
 	def to_dict(self) -> dict[str, Any]:
-		return {
+		result = {
 			"code": self.code,
 			"message": str(self),
 			"recoverable": self.recoverable,
 			"recovery_action": self.recovery_action,
 		}
+		if self.details:
+			result["details"] = self.details
+		return result
 
 
 @dataclass(frozen=True)
@@ -170,7 +176,8 @@ class WorkflowRunner:
 				action_prior = {**waiting_priors, **prior_results}
 				while True:
 					try:
-						result = action(action_context, plan.inputs, action_prior)
+						with request_control(check=control.raise_if_requested, deadline=control.deadline):
+							result = action(action_context, plan.inputs, action_prior)
 						break
 					except WorkflowActionError as exc:
 						if not exc.recoverable or attempt >= max_retries:
@@ -194,6 +201,9 @@ class WorkflowRunner:
 				)
 			except WorkflowActionError as exc:
 				error = exc
+			except RequestBudgetExceeded as exc:
+				recoverable, recovery = error_contract_for_code(exc.code)
+				error = WorkflowActionError(exc.code, str(exc), recoverable=recoverable, recovery_action=recovery, details=exc.details)
 			except KeyboardInterrupt:
 				error = WorkflowActionError(
 					"WORKFLOW_STOPPED",

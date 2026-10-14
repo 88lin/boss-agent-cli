@@ -118,6 +118,7 @@ boss status
 - code `37` 只有凭据语义和明确过期/登录失效语义同时存在时才允许有限刷新；裸 `token` / `stoken`、非法或安全验证文案均停止，安全验证和环境异常优先于过期文案
 - `wt2` 存在但 `stoken` 缺失：通常为部分登录态；使用 Chrome CDP 远程调试端口后运行 `boss login --cdp`，或重新执行 `boss login`
 - `RATE_LIMITED`：已声明可重放的读取可有限冷却；写操作先核对是否生效
+- `REQUEST_BUDGET_EXHAUSTED`：共享执行锁、60 秒预算或冷却超出本次等待时限，本次操作未发出；保留 checkpoint，检查并发与 `retry_after_seconds` 后显式恢复，不自动重试或清锁。同 `data_dir` 默认共享，可用 `request_budget_dir` 显式分组；见 [共享预算配置](commands.md#共享请求预算与冷却)。写后确认中断仍为 `ACTION_UNCONFIRMED`，先核对结果
 - `NOT_SUPPORTED`：切换 schema catalog 中支持该 goal 的平台或 workflow
 - `WORKFLOW_TIMEOUT`：正常 wizard 超时保留 `run_id`，调整超时后显式 `boss wizard --resume <run_id>`；若 MCP 返回 `outcome_unknown=true`，先核对未确认的动作，禁止直接重试
 - `INVALID_PARAM`：校正参数（城市、福利、页码等）

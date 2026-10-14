@@ -7,7 +7,8 @@ import click
 from boss_agent_cli import __version__
 from boss_agent_cli.api.browser_source import POLICIES as BROWSER_SOURCES
 from boss_agent_cli.commands.register import register_candidate_commands, register_recruiter_commands
-from boss_agent_cli.config import load_config
+from boss_agent_cli.config import load_config, validate_request_config
+from boss_agent_cli.api.request_budget import validate_delay
 from boss_agent_cli.hooks import create_hook_bus
 from boss_agent_cli.output import emit_error, Logger
 from boss_agent_cli.platforms import list_platforms
@@ -57,33 +58,67 @@ class BossCliGroup(click.Group):
 @click.version_option(version=__version__, prog_name="boss")
 @click.option("--data-dir", default="~/.boss-agent", help="数据存储目录")
 @click.option("--delay", default=None, help="请求间隔范围（秒），如 1.5-3.0")
-@click.option("--cdp-url", default=None, help="Chrome CDP 调试地址（如 http://localhost:9222），启用则优先用用户 Chrome")
-@click.option("--browser-source", default=None, type=click.Choice(list(BROWSER_SOURCES)), help="浏览器通道来源：auto（默认，允许降级）/ existing-browser（复用现有浏览器）/ stored-cookie（fail-closed，只连指定 CDP，不降级）")
+@click.option(
+	"--cdp-url", default=None, help="Chrome CDP 调试地址（如 http://localhost:9222），启用则优先用用户 Chrome"
+)
+@click.option(
+	"--browser-source",
+	default=None,
+	type=click.Choice(list(BROWSER_SOURCES)),
+	help="浏览器通道来源：auto（默认，允许降级）/ existing-browser（复用现有浏览器）/ stored-cookie（fail-closed，只连指定 CDP，不降级）",
+)
 @click.option("--platform", "platform_name", default=None, help="指定招聘平台适配器（默认 zhipin，即 BOSS 直聘）")
-@click.option("--role", default=None, type=click.Choice(["candidate", "recruiter"]), help="角色模式：candidate（求职者，默认）/ recruiter（招聘者）")
+@click.option(
+	"--role",
+	default=None,
+	type=click.Choice(["candidate", "recruiter"]),
+	help="角色模式：candidate（求职者，默认）/ recruiter（招聘者）",
+)
 @click.option("--log-level", default=None, type=click.Choice(["error", "warning", "info", "debug"]))
 @click.option("--json/--no-json", "json_output", default=False, help="强制 JSON 输出（即使在终端中）")
 @click.pass_context
-def cli(ctx: click.Context, data_dir: str, delay: str | None, cdp_url: str | None, browser_source: str | None, platform_name: str | None, role: str | None, log_level: str | None, json_output: bool) -> None:
+def cli(
+	ctx: click.Context,
+	data_dir: str,
+	delay: str | None,
+	cdp_url: str | None,
+	browser_source: str | None,
+	platform_name: str | None,
+	role: str | None,
+	log_level: str | None,
+	json_output: bool,
+) -> None:
 	ctx.ensure_object(dict)
 	resolved_dir = Path(data_dir).expanduser()
 	resolved_dir.mkdir(parents=True, exist_ok=True)
 	ctx.obj["data_dir"] = resolved_dir
 	ctx.obj["json_output"] = json_output
 
-	cfg = load_config(resolved_dir / "config.json")
+	try:
+		cfg = load_config(resolved_dir / "config.json")
+	except (ValueError, TypeError) as exc:
+		raise click.BadParameter(str(exc), param_hint="config.json") from exc
 
 	if delay:
 		try:
 			low, high = delay.split("-", 1)
 			ctx.obj["delay"] = (float(low), float(high))
+			validate_delay(ctx.obj["delay"])
 		except ValueError as exc:
 			raise click.BadParameter(
-				"delay must be a range like 1.5-3.0",
+				"delay must be a finite range like 1.5-3.0 with 0 <= low <= high",
 				param_hint="--delay",
 			) from exc
 	else:
-		ctx.obj["delay"] = tuple(cfg["request_delay"])
+		# Config inspection/reset must remain available to repair an invalid limit.
+		ctx.obj["delay"] = (
+			tuple(cfg["request_delay"]) if isinstance(cfg["request_delay"], (list, tuple)) else (1.5, 3.0)
+		)
+	if ctx.invoked_subcommand != "config":
+		try:
+			validate_request_config({**cfg, "request_delay": ctx.obj["delay"]})
+		except ValueError as exc:
+			raise click.BadParameter(str(exc), param_hint="config.json") from exc
 
 	level = log_level or cfg["log_level"]
 	ctx.obj["log_level"] = level

@@ -44,6 +44,11 @@ ERROR_CODES: dict[str, dict[str, Any]] = {
 		"recoverable": True,
 		"recovery_action": "等待后重试",
 	},
+	"REQUEST_BUDGET_EXHAUSTED": {
+		"message": "共享请求预算、执行锁或冷却等待超过本次时限，请求未发送",
+		"recoverable": True,
+		"recovery_action": "保留 checkpoint，等待冷却并检查并发任务后显式恢复；不要清除风控锁或自动重试",
+	},
 	"RESULT_LIMIT_REACHED": {
 		"message": "结果超过安全处理上限",
 		"recoverable": True,

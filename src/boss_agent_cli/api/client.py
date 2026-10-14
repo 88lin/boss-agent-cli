@@ -39,7 +39,17 @@ class PlatformRiskError(Exception):
 
 		reason = getattr(lock, "reason", "ENVIRONMENT_RISK")
 		platform_code = getattr(lock, "platform_code", 37)
-		cause = "身份资料流程" if platform_code == 38 else "IP/访问环境限制" if platform_code == 31 else "账号访问限制" if platform_code == 32 else "账号风险" if reason == "ACCOUNT_RISK" else "访问环境风险"
+		cause = (
+			"身份资料流程"
+			if platform_code == 38
+			else "IP/访问环境限制"
+			if platform_code == 31
+			else "账号访问限制"
+			if platform_code == 32
+			else "账号风险"
+			if reason == "ACCOUNT_RISK"
+			else "访问环境风险"
+		)
 		if platform_code is not None:
 			cause += f" (code {platform_code})"
 		if getattr(lock, "corrupt", False):
@@ -49,10 +59,15 @@ class PlatformRiskError(Exception):
 		return error_cls(
 			f"BOSS 直聘此前命中{cause}，本地风控锁尚未显式解除，本次请求未发送。{steps}。",
 			is_cdp=bool(getattr(lock, "cdp_url", None)),
-			details={"risk_lock": {
-				"locked": True, "reason": reason, "platform_code": platform_code,
-				"explicit_resume_required": True, "corrupt": bool(getattr(lock, "corrupt", False)),
-			}},
+			details={
+				"risk_lock": {
+					"locked": True,
+					"reason": reason,
+					"platform_code": platform_code,
+					"explicit_resume_required": True,
+					"corrupt": bool(getattr(lock, "corrupt", False)),
+				}
+			},
 		)
 
 
@@ -75,6 +90,7 @@ class EnvironmentRiskLockedError(EnvironmentRiskError):
 	"""
 
 	code = "ENVIRONMENT_RISK_LOCKED"
+
 
 #: 风控错误码 → 异常类。平台 adapter 的 ``parse_error`` 走响应字典路径时返回的是码，
 #: 执行器用这张表把码升格为异常，与浏览器通道抛出的异常形态走同一条终止分支。
@@ -213,8 +229,11 @@ class BossClient(_BaseHttpClient):
 			return self.job_card_browser(security_id, lid)
 		try:
 			return self.job_card_httpx(security_id, lid)
-		except Exception:
-			pass
+		except Exception as error:
+			from boss_agent_cli.api.request_budget import is_request_stop
+
+			if is_request_stop(error):
+				raise
 		params = {"securityId": security_id, "lid": lid}
 		return self._browser_request("GET", endpoints.JOB_CARD_URL, params=params)
 
@@ -273,7 +292,9 @@ class BossClient(_BaseHttpClient):
 		params = {"gid": gid, "securityId": security_id, "page": page, "c": count, "src": 0}
 		return self._read_request("GET", endpoints.CHAT_HISTORY_URL, params=params)
 
-	def friend_label(self, friend_id: str, label_id: int, friend_source: int = 0, *, remove: bool = False) -> dict[str, Any]:
+	def friend_label(
+		self, friend_id: str, label_id: int, friend_source: int = 0, *, remove: bool = False
+	) -> dict[str, Any]:
 		"""添加或移除好友标签。"""
 		url = endpoints.FRIEND_LABEL_DELETE_URL if remove else endpoints.FRIEND_LABEL_ADD_URL
 		params = {"friendId": friend_id, "friendSource": friend_source, "labelId": label_id}

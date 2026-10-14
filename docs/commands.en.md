@@ -222,6 +222,33 @@ If an older configuration already contains an unsupported platform, explicitly s
 boss --platform zhipin config set platform zhipin
 ```
 
+### Shared request budget and cooldown
+
+CLI calls, Python clients, MCP subprocesses and crawl using the same `data_dir` share a local execution lease and a rolling 60-second budget. An active operation holds the lease through response classification. Failed attempts and permitted read replays consume slots too. Process exit releases the lease without resetting budgets, cooldowns or platform risk locks.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `request_delay` | `[1.5, 3.0]` | Per-instance interval range; Gaussian samples stay within it, while additional pauses may lengthen the interval |
+| `request_max_per_minute` | `20` | Positive integer ceiling for active operations in the shared rolling 60-second window |
+| `request_wait_timeout` | `30.0` | Total seconds allowed per lease, pacing, budget and cooldown acquisition; an earlier workflow deadline takes precedence |
+| `request_budget_dir` | `null` | Uses the current `data_dir` by default; an absolute path explicitly groups multiple data directories |
+
+To share limits across local tasks, configure the group directory and point each member to it:
+
+```bash
+boss --data-dir /path/to/request-group config set request_max_per_minute 20
+boss --data-dir /path/to/account-a config set request_budget_dir /path/to/request-group
+boss --data-dir /path/to/account-b config set request_budget_dir /path/to/request-group
+```
+
+An explicit group uses the ceiling and wait timeout from its own `config.json`; dispatch intervals cannot fall below the group's `request_delay` lower bound. Group members share risk blocking while keeping credentials in their own directories. `status` / `doctor` show effective risk state. After confirming recovery on the intended business page, the user runs `clean --risk-lock` to clear risk locks in the current directory and the budget group. `--dry-run` keeps the locks, and budget/cooldown databases remain intact.
+
+HTTP `429` or business code `9` persists a shared cooldown. `Retry-After` accepts integer seconds or an HTTP date; invalid or missing values use bounded backoff. Risk, stop and deadline controls are checked during waits and immediately before dispatch. Failed acquisition returns a seven-key `REQUEST_BUDGET_EXHAUSTED` error envelope. `error.details.request_sent=false` applies to the current active operation only, with optional `retry_after_seconds`. Keep the checkpoint and explicitly resume after addressing cooldown or concurrency; do not loop retries or clear risk locks. If a write was already dispatched but its confirmation read stops on a budget or control signal, keep `ACTION_UNCONFIRMED` with the `confirmation_stop` reason and verify the actual outcome first.
+
+Accounting covers integrated HTTP dispatches, browser fetches / home navigation / recruiter frontend actions, attachment downloads, and crawl navigation, pagination actions, page fetches and CDP fallback attempts; each separate attempt consumes a slot. This counts active operations: one page action may produce multiple website requests. Autonomous browser resources, polling, automatic redirects and authentication bootstrap requests are not counted packet by packet. The coordinator does not discover or group other processes by public IP. It limits local load and neither guarantees platform acceptance nor removes a server restriction.
+
+`--delay`, `request_delay` and `batch_greet_delay` require finite values satisfying `0 <= low <= high`. Invalid budget settings return `INVALID_PARAM` without writing configuration. `config set/reset` remains available to repair existing invalid settings.
+
 ## Search filter parameters
 
 ```bash

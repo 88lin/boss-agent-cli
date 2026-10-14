@@ -5,12 +5,19 @@ from __future__ import annotations
 import json
 import random
 import socket
-import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, ContextManager, Protocol
 from urllib.parse import quote, urlsplit
 
 from boss_agent_cli.api.zhipin_errors import normalize_risk_code, platform_risk_page_response
+from boss_agent_cli.api.request_budget import (
+	cancellable_sleep,
+	check_request_control,
+	is_request_stop,
+	retry_after_seconds,
+)
 from boss_agent_cli.crawler.hooks import HookInjection, HookRegistrationError, inject_hook_profile
 
 # 兼容 search / pc 等变体；监听只作主路径，失败时退到页面内同源请求（不走 httpx）。
@@ -37,9 +44,12 @@ async function (path, params, timeoutMs) {
 				method: 'GET', credentials: 'include', signal: controller.signal,
 				headers: {'Accept': 'application/json, text/plain, */*'},
 			});
+			if (resp.status === 429) return JSON.stringify({status: 429, text: '',
+				retry_after: resp.headers.get('Retry-After') || ''});
 			const text = await resp.text();
 			return JSON.stringify({status: resp.status, text, url: resp.url,
-				content_type: resp.headers.get('Content-Type') || ''});
+				content_type: resp.headers.get('Content-Type') || '',
+				retry_after: resp.headers.get('Retry-After') || ''});
 		})()]);
 	} catch (e) {
 		return JSON.stringify({status: 0, error: true, interrupted: true});
@@ -102,6 +112,29 @@ class DrissionCrawlerSession:
 		self._user_agent = user_agent or ""
 		self._page: Any = None
 		self._started = False
+		self._attempt_callback: Callable[[str], ContextManager[None]] | None = None
+		self._cooldown_callback: Callable[[float], None] | None = None
+
+	def bind_attempts(
+		self, callback: Callable[[str], ContextManager[None]], cooldown: Callable[[float], None] | None = None
+	) -> None:
+		"""The service counts each navigation, pagination action and active fetch."""
+		self._attempt_callback = callback
+		self._cooldown_callback = cooldown
+
+	@contextmanager
+	def _attempt(self, kind: str) -> Iterator[None]:
+		callback = getattr(self, "_attempt_callback", None)
+		with callback(kind) if callback is not None else nullcontext():
+			check_request_control()
+			self._raise_if_platform_risk_page()
+			yield
+			self._raise_if_platform_risk_page()
+
+	def _record_rate_limit(self, value: object) -> None:
+		callback = getattr(self, "_cooldown_callback", None)
+		if callback is not None:
+			callback(max(10.0, retry_after_seconds(value) or 0.0))
 
 	def open(self) -> list[HookInjection]:
 		try:
@@ -174,37 +207,48 @@ class DrissionCrawlerSession:
 		self._raise_if_platform_risk_page()
 		# 每次拉列表前重置监听，避免附着旧窗口时吃到过期/错误响应包。
 		self._start_joblist_listener()
-		if self._started:
-			self._trigger_next_page()
-		else:
-			self._page.get(f"https://www.zhipin.com/web/geek/jobs?city={city_code}&query={quote(query)}")
-			self._started = True
-		self._raise_if_security_page()
 		listen_error: Exception | None = None
 		try:
-			packet = self._page.listen.wait(timeout=self._timeout, raise_err=False)
-			if packet is not None:
-				response = getattr(packet, "response", None)
-				body = self._normalize_response_body(getattr(response, "body", None))
-				if isinstance(body, dict):
-					self._raise_if_risk_response(body)
-				response_url = getattr(response, "url", None) or getattr(packet, "url", "")
-				page_risk = platform_risk_page_response(
-					url=response_url if isinstance(response_url, str) else "",
-					body=body if isinstance(body, str) else "",
-				)
-				if page_risk is not None:
-					raise CrawlRiskError.from_response(page_risk)
-				if getattr(response, "status", None) == 403:
-					raise CrawlRiskError("职位监听请求 HTTP 403，已停止；请在官方目标业务页确认恢复")
-				if isinstance(body, dict):
-					return body
-				listen_error = ValueError("职位监听响应不是 JSON 对象")
-			else:
-				listen_error = TimeoutError(f"第 {page_no} 页等待 joblist.json 超时")
+			with self._attempt("list-pagination" if self._started else "list-navigation"):
+				if self._started:
+					self._trigger_next_page()
+				else:
+					self._page.get(f"https://www.zhipin.com/web/geek/jobs?city={city_code}&query={quote(query)}")
+					self._started = True
+				self._raise_if_security_page()
+				packet = self._page.listen.wait(timeout=self._timeout, raise_err=False)
+				if packet is not None:
+					response = getattr(packet, "response", None)
+					body = self._normalize_response_body(getattr(response, "body", None))
+					if isinstance(body, dict):
+						self._raise_if_risk_response(body)
+					response_url = getattr(response, "url", None) or getattr(packet, "url", "")
+					page_risk = platform_risk_page_response(
+						url=response_url if isinstance(response_url, str) else "",
+						body=body if isinstance(body, str) else "",
+					)
+					if page_risk is not None:
+						raise CrawlRiskError.from_response(page_risk)
+					if getattr(response, "status", None) == 403:
+						raise CrawlRiskError("职位监听请求 HTTP 403，已停止；请在官方目标业务页确认恢复")
+					if (
+						getattr(response, "status", None) == 429
+						or isinstance(body, dict)
+						and body.get("code") in (9, "9")
+					):
+						headers = getattr(response, "headers", {}) or {}
+						self._record_rate_limit(headers.get("retry-after") or headers.get("Retry-After"))
+						return {"code": 9, "message": "请求频率受限", "zpData": {}}
+					if isinstance(body, dict):
+						return body
+					listen_error = ValueError("职位监听响应不是 JSON 对象")
+				else:
+					listen_error = TimeoutError(f"第 {page_no} 页等待 joblist.json 超时")
 		except CrawlRiskError:
 			raise
 		except Exception as exc:
+			if is_request_stop(exc):
+				raise
 			listen_error = exc
 
 		# 页面 UI 已登录时仍可能监听失败：退到页面上下文请求（同浏览器指纹与 Cookie）。
@@ -221,6 +265,8 @@ class DrissionCrawlerSession:
 		except CrawlRiskError:
 			raise
 		except Exception as page_exc:
+			if is_request_stop(page_exc):
+				raise
 			errors.append(f"页面内 fetch 失败：{page_exc}")
 		self._raise_if_security_page(require_job_list=True)
 		raise RuntimeError("；".join(errors) if errors else f"第 {page_no} 页职位列表获取失败")
@@ -231,7 +277,8 @@ class DrissionCrawlerSession:
 			raise RuntimeError("Drission crawler session is not open")
 		url = str(getattr(self._page, "url", "") or "")
 		if "zhipin.com" not in url:
-			self._page.get(f"https://www.zhipin.com/web/geek/jobs?city={city_code}&query={quote(query)}")
+			with self._attempt("list-navigation"):
+				self._page.get(f"https://www.zhipin.com/web/geek/jobs?city={city_code}&query={quote(query)}")
 		return self._fetch_json_in_page(
 			JOBLIST_PATH,
 			{"query": str(query or ""), "city": str(city_code or ""), "page": str(page_no or 1)},
@@ -247,15 +294,22 @@ class DrissionCrawlerSession:
 			raise RuntimeError("Drission crawler session is not open")
 
 		self._raise_if_security_page()
-		raw = None
+		kind = "detail-fetch" if path == JOB_CARD_PATH else "list-fetch"
 		run_js = getattr(self._page, "run_js", None)
 		if callable(run_js):
-			raw = run_js(_CRAWL_FETCH_SCRIPT, path, params, self._timeout * 1000, timeout=self._timeout + 1)
+			with self._attempt(kind):
+				raw = run_js(_CRAWL_FETCH_SCRIPT, path, params, self._timeout * 1000, timeout=self._timeout + 1)
+				if raw is not None:
+					return self._decode_fetch_response(raw)
 
 		# 2) CDP evaluate + awaitPromise for async fetch if sync path unavailable.
-		if raw is None:
-			raw = self._fetch_json_via_cdp_evaluate(path, params)
+		if callable(getattr(self._page, "run_cdp", None)):
+			with self._attempt(kind + "-cdp"):
+				raw = self._fetch_json_via_cdp_evaluate(path, params)
+				return self._decode_fetch_response(raw)
+		raise RuntimeError("页面内请求没有可用的求值通道")
 
+	def _decode_fetch_response(self, raw: Any) -> dict[str, Any]:
 		if isinstance(raw, str):
 			try:
 				raw = json.loads(raw)
@@ -282,6 +336,9 @@ class DrissionCrawlerSession:
 			raise TimeoutError("页面内读取请求或响应体超时")
 		if raw.get("error") or status <= 0:
 			raise RuntimeError("页面内请求失败")
+		if status == 429 or isinstance(payload, dict) and payload.get("code") in (9, "9"):
+			self._record_rate_limit(raw.get("retry_after"))
+			return {"code": 9, "message": "请求频率受限", "zpData": {}}
 		if status >= 400:
 			raise RuntimeError(f"页面内请求 HTTP {status}")
 		if payload is None:
@@ -346,10 +403,12 @@ class DrissionCrawlerSession:
 		if self._page is None:
 			return
 		for _ in range(2):
+			check_request_control()
 			self._page.scroll.down(800)
-			time.sleep(random.uniform(1.0, 2.0))
+			cancellable_sleep(random.uniform(1.0, 2.0))
+		check_request_control()
 		self._page.scroll.to_bottom()
-		time.sleep(random.uniform(2.5, 5.0))
+		cancellable_sleep(random.uniform(2.5, 5.0))
 
 	@staticmethod
 	def _port_is_in_use(port: int) -> bool:
@@ -363,11 +422,13 @@ class DrissionCrawlerSession:
 			return
 		# Ensure domain context before setting cookies.
 		try:
-			self._page.get("https://www.zhipin.com/")
+			with self._attempt("seed-navigation"):
+				self._page.get("https://www.zhipin.com/")
 		except CrawlRiskError:
 			raise
-		except Exception:
-			pass
+		except Exception as error:
+			if is_request_stop(error):
+				raise
 		self._raise_if_platform_risk_page()
 		cookie_items = [
 			{
@@ -448,7 +509,9 @@ class DrissionCrawlerSession:
 				"由用户执行 boss clean --risk-lock 再显式恢复。"
 			)
 		if urlsplit(url).path.rstrip("/") == "/web/user":
-			raise CrawlRiskError("采集浏览器进入身份资料流程，已停止；请在官方页面完成该流程并确认目标业务页恢复后显式继续")
+			raise CrawlRiskError(
+				"采集浏览器进入身份资料流程，已停止；请在官方页面完成该流程并确认目标业务页恢复后显式继续"
+			)
 		if not require_job_list:
 			return
 		find = getattr(self._page, "ele", None)

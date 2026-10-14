@@ -9,7 +9,8 @@ import click
 import httpx
 
 from boss_agent_cli.api.browser_urls import DEFAULT_CDP_URL
-from boss_agent_cli.api.cdp_risk_lock import UNLOCK_OPERATOR_ACTIONS, lock_status
+from boss_agent_cli.api.cdp_risk_lock import UNLOCK_OPERATOR_ACTIONS
+from boss_agent_cli.api.request_budget import risk_lock_status as lock_status
 from boss_agent_cli.auth.browser import probe_cdp
 from boss_agent_cli.auth.cookie_extract import extract_cookies
 from boss_agent_cli.auth.health import assess_auth_health, auth_config_for_platform

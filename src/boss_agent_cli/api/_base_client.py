@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import random
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -26,7 +28,17 @@ from boss_agent_cli.api.httpx_helpers import (
 )
 from boss_agent_cli.api.endpoints_loader import endpoint_for_request
 from boss_agent_cli.api.throttle import RequestThrottle
-from boss_agent_cli.api.zhipin_errors import normalize_risk_code, platform_risk_page_response, raise_platform_risk_response
+from boss_agent_cli.api.request_budget import (
+	RequestBudget,
+	cancellable_sleep,
+	check_request_control,
+	retry_after_seconds,
+)
+from boss_agent_cli.api.zhipin_errors import (
+	normalize_risk_code,
+	platform_risk_page_response,
+	raise_platform_risk_response,
+)
 
 if TYPE_CHECKING:
 	from boss_agent_cli.api.browser_client import BrowserSession
@@ -67,7 +79,9 @@ class _BaseHttpClient:
 		self._delay = delay
 		self._client: httpx.Client | None = None
 		self._browser_session: "BrowserSession | None" = None
-		self._throttle = RequestThrottle(delay)
+		self._throttle = RequestThrottle(delay, check=self._check_cdp_risk_lock)
+		data_dir = self._risk_lock_dir()
+		self._request_budget = RequestBudget.for_data_dir(data_dir, interval=delay[0]) if data_dir is not None else None
 		self._cdp_url = cdp_url
 		# 浏览器通道来源意图；None = auto（默认路径行为不变）。
 		# 只在此处保存并透传给唯一的 BrowserSession 构造点，不在本类上派生
@@ -158,6 +172,9 @@ class _BaseHttpClient:
 		lock = lock or getattr(self, "_unpersisted_risk_lock", None)
 		if lock is not None:
 			raise PlatformRiskError.from_lock(lock)
+		budget = getattr(self, "_request_budget", None)
+		if budget is not None:
+			budget.check_risk()
 
 	def _record_cdp_risk_lock(self, browser: Any = None, *, error: "PlatformRiskError | None" = None) -> None:
 		"""记录任一传输通道的风险；摘要只作诊断，写盘失败仍锁存当前实例。"""
@@ -175,27 +192,47 @@ class _BaseHttpClient:
 		reason = "ACCOUNT_RISK" if error is not None and error.code == "ACCOUNT_RISK" else "ENVIRONMENT_RISK"
 		details = error.details if error is not None else {}
 		prior_lock = details.get("risk_lock", {})
-		raw_code = details.get("platform_code", prior_lock.get("platform_code") if isinstance(prior_lock, dict) else None) if error is not None else 37
+		raw_code = (
+			details.get("platform_code", prior_lock.get("platform_code") if isinstance(prior_lock, dict) else None)
+			if error is not None
+			else 37
+		)
 		platform_code = normalize_risk_code(raw_code)
 		lock = cdp_risk_lock.RiskLock(
-			stoken_sha256=current if isinstance(current, str) else None, locked_at=time.time(),
-			cdp_url=getattr(self, "_cdp_url", None), reason=reason, platform_code=platform_code,
+			stoken_sha256=current if isinstance(current, str) else None,
+			locked_at=time.time(),
+			cdp_url=getattr(self, "_cdp_url", None),
+			reason=reason,
+			platform_code=platform_code,
 		)
 		self._unpersisted_risk_lock = lock
 		if data_dir is None:
 			return
 		try:
 			cdp_risk_lock.write_lock(
-				data_dir, lock.stoken_sha256, cdp_url=lock.cdp_url, now=lock.locked_at,
-				reason=lock.reason, platform_code=lock.platform_code,
+				data_dir,
+				lock.stoken_sha256,
+				cdp_url=lock.cdp_url,
+				now=lock.locked_at,
+				reason=lock.reason,
+				platform_code=lock.platform_code,
 			)
 			self._unpersisted_risk_lock = None
 		except OSError:
 			pass
+		budget = getattr(self, "_request_budget", None)
+		if budget is not None and budget.root != data_dir.resolve():
+			try:
+				budget.record_risk(reason=lock.reason, platform_code=lock.platform_code)
+			except OSError:
+				self._unpersisted_risk_lock = lock
 		if error is not None:
 			error.details["risk_lock"] = {
-				"locked": True, "reason": lock.reason, "platform_code": lock.platform_code,
-				"explicit_resume_required": True, "persisted": self._unpersisted_risk_lock is None,
+				"locked": True,
+				"reason": lock.reason,
+				"platform_code": lock.platform_code,
+				"explicit_resume_required": True,
+				"persisted": self._unpersisted_risk_lock is None,
 			}
 
 	def _raise_platform_risk_response(self, response: dict[str, Any], *, browser: Any = None) -> None:
@@ -273,6 +310,8 @@ class _BaseHttpClient:
 				cdp_url=self._cdp_url,
 				logger=getattr(self._auth, "_logger", None),
 				browser_source=policy.name,
+				request_budget=getattr(self, "_request_budget", None),
+				request_check=self._check_cdp_risk_lock,
 			)
 		return self._browser_session
 
@@ -285,6 +324,18 @@ class _BaseHttpClient:
 	def _should_refresh_token_response(self, data: dict[str, Any]) -> bool:
 		"""决定该响应是否应触发 token 刷新重试；子类按平台语义覆写。"""
 		return data.get("code") == self._CODE_STOKEN_EXPIRED
+
+	@contextmanager
+	def _request_window(self, kind: str = "api") -> Iterator[None]:
+		budget = getattr(self, "_request_budget", None)
+		if budget is not None:
+			with budget.attempt(kind, check=self._check_cdp_risk_lock, before_wait=self._throttle.wait):
+				check_request_control(self._check_cdp_risk_lock)
+				yield
+		else:
+			self._throttle.wait()
+			check_request_control(self._check_cdp_risk_lock)
+			yield
 
 	# ── httpx request with retry (low-risk ops) ──────────────────────
 
@@ -299,87 +350,104 @@ class _BaseHttpClient:
 		operation = endpoint_for_request(method, url)
 		write_possible = operation is None or operation.effect != "read"
 		max_retries = _MAX_RETRIES if retry and operation is not None and operation.replay_safe else 0
+		budget = getattr(self, "_request_budget", None)
 		for attempt in range(max_retries + 1):
-			client = self._get_client()
-			token = self._auth.get_token()
-			stoken = token.get("stoken", "")
+			with self._request_window():
+				client = self._get_client()
+				token = self._auth.get_token()
+				stoken = token.get("stoken", "")
 
-			add_stoken_to_get_params(method, kwargs, stoken)
+				add_stoken_to_get_params(method, kwargs, stoken)
 
-			self._throttle.wait()
+				headers = {**self._headers_for(url), **extra_headers_override}
+				check_request_control(self._check_cdp_risk_lock)
+				try:
+					resp = client.request(method, url, headers=headers, **kwargs)
+				except Exception as error:
+					from boss_agent_cli.api.client import PlatformRiskError
 
-			headers = {**self._headers_for(url), **extra_headers_override}
-			try:
-				resp = client.request(method, url, headers=headers, **kwargs)
-			except Exception as error:
-				from boss_agent_cli.api.client import PlatformRiskError
+					if isinstance(error, PlatformRiskError):
+						self._record_cdp_risk_lock(error=error)
+						raise
+					if not isinstance(error, httpx.TransportError) or not write_possible:
+						raise
+					return self._unconfirmed_http_response(url, "transport_error")
+				finally:
+					self._throttle.mark()
+				self._merge_cookies(resp)
 
-				if isinstance(error, PlatformRiskError):
+				# HTTP 状态和“安全验证”文案不能先覆盖风险业务码，更不能触发自动换登录通道。
+				try:
+					payload = resp.json()
+				except ValueError:
+					payload = None
+				data = payload if isinstance(payload, dict) else None
+				from boss_agent_cli.api.client import AccountRiskError, PlatformRiskError
+
+				if data is not None:
+					self._raise_platform_risk_response(data)
+				try:
+					try:
+						final_url = str(resp.url)
+					except (AttributeError, RuntimeError):
+						final_url = ""
+					response_headers = getattr(resp, "headers", {})
+					page_risk = platform_risk_page_response(
+						url=final_url,
+						content_type=str(response_headers.get("content-type", "")),
+						body=resp.text,
+					)
+					if page_risk is not None:
+						raise_platform_risk_response(page_risk)
+					if resp.status_code == 403:
+						raise AccountRiskError(
+							"平台拒绝访问 (HTTP 403)，未自动刷新或重试；请在官方页面核实当前会话",
+							details={"platform_code": None, "http_status": 403},
+						)
+				except PlatformRiskError as error:
 					self._record_cdp_risk_lock(error=error)
 					raise
-				if not isinstance(error, httpx.TransportError) or not write_possible:
-					raise
-				return self._unconfirmed_http_response(url, "transport_error")
-			self._throttle.mark()
-			self._merge_cookies(resp)
-
-			# HTTP 状态和“安全验证”文案不能先覆盖风险业务码，更不能触发自动换登录通道。
-			try:
-				payload = resp.json()
-			except ValueError:
-				payload = None
-			data = payload if isinstance(payload, dict) else None
-			from boss_agent_cli.api.client import AccountRiskError, PlatformRiskError
-
-			if data is not None:
-				self._raise_platform_risk_response(data)
-			try:
+				if resp.status_code == 401:
+					return {"code": 401, "message": "平台认证已失效，请重新登录", "zpData": {}}
+				if resp.status_code == 429:
+					data = {
+						**(data or {}),
+						"code": self._CODE_RATE_LIMITED,
+						"message": "HTTP 429 rate limited",
+						"zpData": {},
+					}
 				try:
-					final_url = str(resp.url)
-				except (AttributeError, RuntimeError):
-					final_url = ""
-				response_headers = getattr(resp, "headers", {})
-				page_risk = platform_risk_page_response(
-					url=final_url,
-					content_type=str(response_headers.get("content-type", "")),
-					body=resp.text,
-				)
-				if page_risk is not None:
-					raise_platform_risk_response(page_risk)
-				if resp.status_code == 403:
-					raise AccountRiskError(
-						"平台拒绝访问 (HTTP 403)，未自动刷新或重试；请在官方页面核实当前会话",
-						details={"platform_code": None, "http_status": 403},
-					)
-			except PlatformRiskError as error:
-				self._record_cdp_risk_lock(error=error)
-				raise
-			if resp.status_code == 401:
-				return {"code": 401, "message": "平台认证已失效，请重新登录", "zpData": {}}
-			try:
-				resp.raise_for_status()
-			except httpx.HTTPStatusError:
-				if not write_possible:
-					raise
-				return self._unconfirmed_http_response(url, "http_status_error")
-			if data is None:
-				if write_possible:
-					return self._unconfirmed_http_response(url, "invalid_response")
-				raise ValueError("平台响应不是 JSON 对象")
-			code = data.get("code")
-
+					if resp.status_code != 429:
+						resp.raise_for_status()
+				except httpx.HTTPStatusError:
+					if not write_possible:
+						raise
+					return self._unconfirmed_http_response(url, "http_status_error")
+				if data is None:
+					if write_possible:
+						return self._unconfirmed_http_response(url, "invalid_response")
+					raise ValueError("平台响应不是 JSON 对象")
+				code = data.get("code")
+				limited = code in (self._CODE_RATE_LIMITED, str(self._CODE_RATE_LIMITED)) or resp.status_code == 429
+				cooldown = None
+				if limited:
+					data["code"] = self._CODE_RATE_LIMITED
+					cooldown = retry_after_seconds(response_headers.get("retry-after"))
+					cooldown = max(cooldown or 0.0, min(60, 10 * (2**attempt)))
+					if budget is not None:
+						budget.cooldown(cooldown)
 			# stoken 过期 → 刷新重试（BOSS 客户端按语境分类，语义不明不刷新）
 			if self._should_refresh_token_response(data) and attempt < max_retries:
 				backoff = (2**attempt) + random.uniform(0.5, 1.5)
-				time.sleep(backoff)
+				cancellable_sleep(backoff, check=self._check_cdp_risk_lock)
 				self._auth.force_refresh(cdp_url=self._cdp_url, browser_source=self._browser_source)
 				self._client = None
 				continue
 
 			# 频率限制 → 冷却重试
-			if code == self._CODE_RATE_LIMITED and attempt < max_retries:
-				cooldown = min(60, 10 * (2**attempt))
-				time.sleep(cooldown)
+			if limited and attempt < max_retries:
+				if budget is None:
+					cancellable_sleep(cooldown or 0.0, check=self._check_cdp_risk_lock)
 				continue
 
 			if self._ADD_ENDPOINT_HINT and isinstance(data, dict):
