@@ -1,7 +1,9 @@
 # Branch Protection
 
-The default branch is `master`. The repository intentionally does not run general
-CI or documentation workflows on pushes and pull requests. Maintainers must run
+The default branch is `master`. Pull requests and pushes to `master` run the
+`CI` workflow (`.github/workflows/ci.yml`): ruff, mypy, pre-commit, a CLI/schema
+smoke check, and the offline pytest matrix on Python 3.10 / 3.12 / 3.14. It uses
+a read-only token, no secrets, and works for fork PRs. Maintainers must still run
 the local quality gate below before merging.
 
 ## Required settings
@@ -61,6 +63,6 @@ gh api repos/can4hou6joeng4/boss-agent-cli/branches/master/protection \
 	--jq '.required_status_checks // null'
 ```
 
-The expected result is `null`. If general CI is reintroduced later, update this
-runbook and the repository's governance tests in the same pull request before
-adding required check contexts.
+The expected result is `null`. CI is back (restored 2026-10-09) but required
+check contexts remain intentionally unconfigured; if they are ever added, update
+this runbook and the repository's governance tests in the same pull request.

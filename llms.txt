@@ -1,0 +1,35 @@
+# boss-agent-cli
+
+> A BOSS Zhipin (BOSS 直聘) CLI for people and AI agents. Job discovery with real welfare filtering, applications, recruiter workflows, resumes, AI assistance and recoverable crawling share one capability set behind a single JSON envelope. Current version: 3.0.0.
+
+## Capability source of truth
+
+Run `boss schema` (also supports `--format native | openai-tools | anthropic-tools | mcp-tools`). 39 top-level commands, 13 first-level recruiter subcommands, 77 implemented MCP tools. The sole registered platform is zhipin (BOSS Zhipin).
+
+## Start here
+
+- [Agent quickstart](docs/agent-quickstart.md) — envelope contract, error recovery, risk-stop rules
+- [Command reference](docs/commands.md)
+- [Capability matrix](docs/capability-matrix.md)
+- [Getting started](docs/getting-started.md)
+- [Troubleshooting](docs/troubleshooting.md)
+
+## Install
+
+- MCP server: `uvx --from boss-agent-cli[mcp] boss-mcp`
+- CLI: `uv tool install boss-agent-cli`
+- Browser core (login / export only): `patchright install chromium`
+
+## Contract
+
+Every command emits exactly one JSON envelope to stdout: `{ok, schema_version, command, data, pagination, error, hints}`. Logs and terminal displays go to stderr. `exit 0` ⇔ `ok=true`; `exit 1` ⇔ `ok=false`. Errors carry `code`, `recoverable` and `recovery_action`.
+
+## Boundaries
+
+Platform risk codes or security pages stop the workflow and save a checkpoint; resume is explicit and user-driven. Do not bypass risk controls, parallelize requests, or retry indefinitely. Local-first: no telemetry, data stays on this machine.
+
+## Links
+
+- GitHub: https://github.com/can4hou6joeng4/boss-agent-cli
+- PyPI: https://pypi.org/project/boss-agent-cli/
+- Project site: https://can4hou6joeng4.github.io/boss-agent-cli/
