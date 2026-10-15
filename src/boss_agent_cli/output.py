@@ -156,9 +156,49 @@ def emit_success(command: str, data: Any, **kwargs: Any) -> None:
 	click.echo(envelope_success(command, data, **kwargs))
 
 
+# ── 可选语义化退出码（--exit-codes sysexits）────────────────────────────
+# 默认 envelope 模式保持「exit 0 ⇔ ok=true，exit 1 ⇔ ok=false」契约不变。
+# 键必须存在于 schema/error_codes.ERROR_CODES（tests/test_exit_codes.py 守卫）；
+# 未列出的错误码与未知码一律回退 1。刻意不用 66（空结果）：本项目空结果 = ok=true。
+SYSEXITS_EXIT_CODES: dict[str, int] = {
+	"INVALID_PARAM": 78,  # EX_CONFIG
+	"AUTH_REQUIRED": 77,  # EX_NOPERM
+	"AUTH_EXPIRED": 77,
+	"LOGIN_EXPIRED": 77,
+	"TOKEN_REFRESH_FAILED": 77,
+	"LOGIN_CREDENTIAL_EXTRACTION_FAILED": 77,
+	"RATE_LIMITED": 75,  # EX_TEMPFAIL
+	"REQUEST_BUDGET_EXHAUSTED": 75,
+	"LOGIN_TIMEOUT": 75,
+	"WORKFLOW_TIMEOUT": 75,
+	"ACCOUNT_RISK": 69,  # EX_UNAVAILABLE
+	"ENVIRONMENT_RISK": 69,
+	"ENVIRONMENT_RISK_LOCKED": 69,
+	"LOGIN_RISK_CONTROL": 69,
+	"NOT_SUPPORTED": 69,
+	"PLATFORM_NOT_SUPPORTED": 69,
+}
+_EXIT_CODES_MODES = ("envelope", "sysexits")
+_exit_codes_mode = "envelope"
+
+
+def set_exit_codes_mode(mode: str) -> None:
+	"""Set the process-wide exit-code style; unknown values fall back to envelope."""
+	global _exit_codes_mode
+	normalized = mode.strip().lower()
+	_exit_codes_mode = normalized if normalized in _EXIT_CODES_MODES else "envelope"
+
+
+def exit_code_for_error(code: str) -> int:
+	"""Return the exit code for a failed command under the active mode."""
+	if _exit_codes_mode == "sysexits":
+		return SYSEXITS_EXIT_CODES.get(code, 1)
+	return 1
+
+
 def emit_error(command: str, **kwargs: Any) -> None:
 	click.echo(envelope_error(command, **kwargs))
-	sys.exit(1)
+	sys.exit(exit_code_for_error(str(kwargs.get("code") or "")))
 
 
 class Logger:

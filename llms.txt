@@ -22,7 +22,7 @@ Run `boss schema` (also supports `--format native | openai-tools | anthropic-too
 
 ## Contract
 
-Every command emits exactly one JSON envelope to stdout: `{ok, schema_version, command, data, pagination, error, hints}`. Logs and terminal displays go to stderr. `exit 0` ⇔ `ok=true`; `exit 1` ⇔ `ok=false`. Errors carry `code`, `recoverable` and `recovery_action`.
+Every command emits exactly one JSON envelope to stdout: `{ok, schema_version, command, data, pagination, error, hints}`. Logs and terminal displays go to stderr. `exit 0` ⇔ `ok=true`; `exit 1` ⇔ `ok=false` by default — opt-in `--exit-codes sysexits` maps error classes to sysexits codes (77 auth, 75 temp-fail, 78 config, 69 unavailable). Errors carry `code`, `recoverable` and `recovery_action`.
 
 ## Boundaries
 

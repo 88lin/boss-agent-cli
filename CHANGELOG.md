@@ -13,7 +13,8 @@
 - 新增维护者发布验证脚本：默认离线核对版本、wheel/sdist 元数据与分发文件，显式启用后可在临时环境全新解析依赖、验证 CLI/MCP，或从 PyPI 安装指定版本复验；输出结构化步骤结果，不执行发布或真实平台请求。
 - 新增仓库根 `llms.txt`：面向 LLM 的单页能力入口（能力真源、信封契约、运行边界与链接），指向 `boss schema` 与关键文档；不引入会与 schema 漂移的静态工具清单。
 - `boss login` 的浏览器 Cookie 提取从 6 个扩展到 10 个：新增 Vivaldi / Arc / LibreWolf / Safari，自动检测优先级不变、新浏览器作为后备；macOS Safari 需要完全磁盘访问，读取失败时静默尝试下一个浏览器。
-- 新增 `docs/research/opencli-benchmark-2026-10-15.md`（含英文对照）：对标 OpenCLI / boss-cli / opencli-mcp / xhs-cli 的差距矩阵、已确认缺陷（文档漂移、wizard 分层违规）与分批改进方案。
+- 新增 `docs/research/opencli-benchmark-2026-10-15.md`（含英文对照）：对标 OpenCLI / boss-cli / opencli-mcp / xhs-cli 的差距矩阵、已确认缺陷（文档漂移）与分批改进方案；分层规则复核更正见方案 §3.3。
+- 新增全局 `--exit-codes {envelope,sysexits}`（默认 envelope，0/1 契约不变）：sysexits 模式按错误类别返回语义化退出码（77 认证；75 限流/预算/超时；78 参数/配置；69 风控/平台不支持；其余 1），usage error 通过解析前预扫描同一选项；stdout 信封不受影响。
 
 ### Changed
 - MCP、OpenAI 和 Anthropic 工具格式统一使用不依赖 MCP SDK 的共享目录，工具导出由旧的不完整命令映射改为与运行时一致的 77 个工具；原生 schema 保留 39 个顶层命令。保留工具参数结构的脱敏例外仅限 schema 明确声明的内置参数路径，真实业务数据和敏感默认值/示例仍脱敏。

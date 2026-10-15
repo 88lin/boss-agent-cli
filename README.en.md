@@ -70,7 +70,7 @@ boss hr recommendations --job-id <encJobId>
 boss hr jobs list
 ```
 
-Every command outputs structured JSON (`ok` for success, `exit 0/1`). Full walk-through: [Getting Started](docs/getting-started.en.md).
+Every command outputs structured JSON (`ok` for success, `exit 0/1` by default; the optional `--exit-codes sysexits` returns semantic exit codes per error class). Full walk-through: [Getting Started](docs/getting-started.en.md).
 
 ## 🎭 Roles & Platforms
 
@@ -191,7 +191,7 @@ CLI (Click)
             └─ output.py → JSON envelope → stdout
 ```
 
-**Invariants**: stdout is JSON-only · stderr holds logs · `exit 0/1` · errors carry `code/recoverable/recovery_action` · `boss schema` is the authoritative capability source.
+**Invariants**: stdout is JSON-only · stderr holds logs · `exit 0/1` (optional `--exit-codes sysexits` for semantic codes) · errors carry `code/recoverable/recovery_action` · `boss schema` is the authoritative capability source.
 **Two audiences, one envelope**: `hints.next_actions` holds follow-up commands for the Agent to run; `hints.operator_actions` holds natural-language guidance for the human operator (scan a QR code, adjust filters in the browser — anything done away from the terminal). TTY renders only the latter, to stderr; an Agent should relay it to the operator.
 **Command or wizard**: single-shot, stateless capability calls go through top-level commands; anything needing cross-step state, resumability, or handing guidance to a human goes through `boss wizard` (goals listed under `wizard_catalog` in `boss schema`).
 **Stack**: Python ≥ 3.10 · Click · httpx · patchright / CDP (login, export, and declared browser adapters) · cryptography · sqlite3 (WAL) · pytest (2900+).

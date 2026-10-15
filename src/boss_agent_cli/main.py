@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 from collections.abc import Sequence
 from typing import Any
@@ -10,8 +11,20 @@ from boss_agent_cli.commands.register import register_candidate_commands, regist
 from boss_agent_cli.config import load_config, validate_request_config
 from boss_agent_cli.api.request_budget import validate_delay
 from boss_agent_cli.hooks import create_hook_bus
-from boss_agent_cli.output import emit_error, Logger
+from boss_agent_cli.output import emit_error, Logger, set_exit_codes_mode
 from boss_agent_cli.platforms import list_platforms
+
+
+def _prescan_exit_codes(args: Sequence[str] | None) -> None:
+	"""Usage errors are raised before the group callback runs; scan raw argv so an
+	explicit `--exit-codes sysexits` still governs their exit code. Unknown values
+	are normalized to envelope by set_exit_codes_mode."""
+	tokens = list(args) if args is not None else sys.argv[1:]
+	for index, token in enumerate(tokens):
+		if token == "--exit-codes" and index + 1 < len(tokens):
+			set_exit_codes_mode(tokens[index + 1])
+		elif token.startswith("--exit-codes="):
+			set_exit_codes_mode(token.split("=", 1)[1])
 
 
 class BossCliGroup(click.Group):
@@ -25,6 +38,7 @@ class BossCliGroup(click.Group):
 		standalone_mode: bool = True,
 		**extra: Any,
 	) -> Any:
+		_prescan_exit_codes(args)
 		try:
 			return super().main(
 				args=args,
@@ -76,6 +90,12 @@ class BossCliGroup(click.Group):
 )
 @click.option("--log-level", default=None, type=click.Choice(["error", "warning", "info", "debug"]))
 @click.option("--json/--no-json", "json_output", default=False, help="强制 JSON 输出（即使在终端中）")
+@click.option(
+	"--exit-codes",
+	default="envelope",
+	type=click.Choice(["envelope", "sysexits"]),
+	help="退出码风格：envelope（默认，0=成功/1=失败）或 sysexits（按错误类别返回语义化退出码）",
+)
 @click.pass_context
 def cli(
 	ctx: click.Context,
@@ -87,12 +107,15 @@ def cli(
 	role: str | None,
 	log_level: str | None,
 	json_output: bool,
+	exit_codes: str,
 ) -> None:
 	ctx.ensure_object(dict)
 	resolved_dir = Path(data_dir).expanduser()
 	resolved_dir.mkdir(parents=True, exist_ok=True)
 	ctx.obj["data_dir"] = resolved_dir
 	ctx.obj["json_output"] = json_output
+	ctx.obj["exit_codes"] = exit_codes
+	set_exit_codes_mode(exit_codes)
 
 	try:
 		cfg = load_config(resolved_dir / "config.json")
