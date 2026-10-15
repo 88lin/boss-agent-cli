@@ -11,11 +11,15 @@
 - `boss search` 新增 `--active <档位>`，按 HR 活跃度筛选职位（#442）。档位 `online` / `today` / `3d` / `week` / `2w` / `month` / `half-year`，也认 `3day`、`3日` 等写法；平台文案按「在线/刚刚活跃 > 今日活跃 > 3日内活跃 > 本周活跃 > 2周内活跃 > 本月活跃 > 近半年活跃 > 半年前活跃」比较。列表带 `activeTimeDesc` 或 `bossOnline` 为在线时直接判断，否则查 job_card；和 `--welfare` 同用时一次详情请求同时判断两项。启用后跳过搜索缓存，无法识别的文案被排除并写进 `hints.active_filter`。职位结果新增 `boss_active_desc` 字段（`boss_active` 不变，搜索缓存 schema 升到 3），`preset add`、MCP `boss_search` / `boss_preset_add` 与向导求职流程同步支持。
 - 替换仓库 README 与项目站点的展示动画为 48 秒极光发布会成片，提供 MP4、轻量动图、新封面和可交互源工程；站点播放期间保持当前画面，切换到终端演示时暂停视频。
 - 新增维护者发布验证脚本：默认离线核对版本、wheel/sdist 元数据与分发文件，显式启用后可在临时环境全新解析依赖、验证 CLI/MCP，或从 PyPI 安装指定版本复验；输出结构化步骤结果，不执行发布或真实平台请求。
+- 新增仓库根 `llms.txt`：面向 LLM 的单页能力入口（能力真源、信封契约、运行边界与链接），指向 `boss schema` 与关键文档；不引入会与 schema 漂移的静态工具清单。
+- `boss login` 的浏览器 Cookie 提取从 6 个扩展到 10 个：新增 Vivaldi / Arc / LibreWolf / Safari，自动检测优先级不变、新浏览器作为后备；macOS Safari 需要完全磁盘访问，读取失败时静默尝试下一个浏览器。
+- 新增 `docs/research/opencli-benchmark-2026-10-15.md`（含英文对照）：对标 OpenCLI / boss-cli / opencli-mcp / xhs-cli 的差距矩阵、已确认缺陷（文档漂移、wizard 分层违规）与分批改进方案。
 
 ### Changed
 - MCP、OpenAI 和 Anthropic 工具格式统一使用不依赖 MCP SDK 的共享目录，工具导出由旧的不完整命令映射改为与运行时一致的 77 个工具；原生 schema 保留 39 个顶层命令。保留工具参数结构的脱敏例外仅限 schema 明确声明的内置参数路径，真实业务数据和敏感默认值/示例仍脱敏。
 - 恢复面向 PR 的 `CI` 工作流（参照 Wholiver/metis 的 Test 工作流）：`pull_request` 与推送 `master` 时运行 ruff、mypy、pre-commit、CLI/schema 冒烟和 Python 3.10 / 3.12 / 3.14 测试矩阵；只读权限、同一 PR 新推送取消旧运行、不使用任何 secret，外部贡献者的 fork PR 可直接运行。pre-commit 的 end-of-file-fixer 排除 star-history 自动生成的 SVG，并补上 `wizard/renderer.py` 结尾换行，使 `pre-commit run --all-files` 在 master 上可以通过；贡献指南同步更新 CI 说明，去掉已失效的 Codecov 描述。
 - 同步项目站点中英文正文与 `llms.txt` 的 v3.0.0 版本、命令与 MCP 数量、双角色工作流及平台风险停止／显式恢复说明，移除过时的模式级阻断宣传；修正发布会源工程的本地预览服务目录。
+- 文档对齐：`CLAUDE.md` 与 `docs/maintainer/branch-protection.md` 同步 2026-10-09 已恢复的 PR CI（lint + Python 3.10 / 3.12 / 3.14 测试矩阵；required status checks 仍未配置）；`pyproject.toml` 注释改指本地 `scripts/verify_release.py --fresh-install`；中英文 README 与 `CLAUDE.md` 的测试计数更新为 2900+。
 
 ### Fixed
 - 修正节流完成时间覆盖后续预约、高斯采样突破间隔下限及 crawl 分类别预算边界；使用单调时钟保持预约，crawl 首页种子导航、分页、页面 fetch 和 CDP fallback 分别申请预算。等待及发送前检查停止、风险和截止时间，停止信号不触发重试或通道降级；写后确认受阻保留 `ACTION_UNCONFIRMED` 和 `confirmation_stop`，失败下载仍记节流，429 下载不读正文或创建文件。crawl 在中断或清理失败前保存进度，清理异常保留原风险或预算停止状态。

@@ -29,7 +29,9 @@ def extract_cookies(source: str | None = None, *, platform: str = "zhipin") -> d
 	required_cookie = config["required_cookie"]
 	stoken_cookie = config["stoken_cookie"]
 
-	# 浏览器加载函数映射
+	# 字典顺序即自动检测优先级；新增浏览器追加在末尾作为后备，
+	# 不改变既有浏览器的优先级。macOS Safari 需要完全磁盘访问，
+	# 读取失败会被 _try_extract 静默跳过并继续下一个。
 	loaders = {
 		"chrome": browser_cookie3.chrome,
 		"firefox": browser_cookie3.firefox,
@@ -37,6 +39,10 @@ def extract_cookies(source: str | None = None, *, platform: str = "zhipin") -> d
 		"brave": browser_cookie3.brave,
 		"opera": browser_cookie3.opera,
 		"chromium": browser_cookie3.chromium,
+		"vivaldi": browser_cookie3.vivaldi,
+		"arc": browser_cookie3.arc,
+		"librewolf": browser_cookie3.librewolf,
+		"safari": browser_cookie3.safari,
 	}
 
 	if source:

@@ -214,3 +214,36 @@ def test_extract_cookies_returns_none_when_browser_cookie3_not_installed():
 	finally:
 		if saved is not None:
 			_sys.modules["browser_cookie3"] = saved
+
+
+# ── 2026-10 扩展浏览器集合（对齐 boss-cli 的 10+ 覆盖） ─────────
+
+
+def test_extract_cookies_supports_extended_browser_set():
+	"""vivaldi / arc / librewolf / safari 均可显式选择，大小写不敏感。"""
+
+	def make_loader(value):
+		def loader(domain_name=None):
+			return [_fake_cookie("wt2", value), _fake_cookie("__zp_stoken__", "s")]
+
+		return loader
+
+	fake_module = MagicMock()
+	for attr, value in (
+		("vivaldi", "from-vivaldi"),
+		("arc", "from-arc"),
+		("librewolf", "from-librewolf"),
+		("safari", "from-safari"),
+	):
+		setattr(fake_module, attr, make_loader(value))
+
+	with patch.dict("sys.modules", {"browser_cookie3": fake_module}):
+		for source, expected in (
+			("vivaldi", "from-vivaldi"),
+			("Arc", "from-arc"),
+			("LibreWolf", "from-librewolf"),
+			("Safari", "from-safari"),
+		):
+			result = extract_cookies(source=source)
+			assert result is not None, source
+			assert result["cookies"]["wt2"] == expected
