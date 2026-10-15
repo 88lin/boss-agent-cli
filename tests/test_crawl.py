@@ -92,7 +92,7 @@ def test_crawl_budget_coordinates_separate_cache_connections(tmp_path: Path) -> 
 
 	assert first_sleeps == []
 	assert second_sleeps == [4.0]
-	assert second_cache.get_crawl_budget("zhipin:list") == 105.0
+	assert second_cache.get_crawl_budget("zhipin:all") == 105.0
 	first_cache.close()
 	second_cache.close()
 
@@ -348,7 +348,7 @@ def test_fetch_page_falls_back_to_in_page_fetch_when_listen_returns_html(monkeyp
 		def quit(self) -> None:
 			pass
 
-		def run_js(self, script, path, params):
+		def run_js(self, script, path, params, timeout_ms, *, timeout):
 			# Must be sync-callable result (async run_js returns None in real DrissionPage).
 			assert "XMLHttpRequest" in script or "function" in script
 			assert path == "/wapi/zpgeek/search/joblist.json"
@@ -452,7 +452,7 @@ def test_fetch_page_never_falls_back_to_httpx_when_listen_and_page_js_fail(monke
 		seed_cookies={"wt2": "t"},
 	)
 	session.open()
-	with pytest.raises(CrawlRiskError) as exc_info:
+	with pytest.raises(RuntimeError) as exc_info:
 		session.fetch_page("AI", "101210100", 1)
 	assert "页面内 fetch 失败" in str(exc_info.value)
 	assert "HTTP 回退" not in str(exc_info.value)
@@ -470,7 +470,7 @@ def test_fetch_detail_requests_job_card_inside_page_not_httpx(monkeypatch, tmp_p
 	class Page:
 		url = "https://www.zhipin.com/web/geek/jobs"
 
-		def run_js(self, script, path, params):
+		def run_js(self, script, path, params, timeout_ms, *, timeout):
 			calls.append((path, params))
 			return {"status": 200, "text": json.dumps({"code": 0, "zpData": {"jobCard": {"postDescription": "jd"}}})}
 
@@ -491,7 +491,7 @@ def test_fetch_detail_in_page_risk_code_stops(tmp_path):
 	class Page:
 		url = "https://www.zhipin.com/web/geek/jobs"
 
-		def run_js(self, script, path, params):
+		def run_js(self, script, path, params, timeout_ms, *, timeout):
 			return {"status": 200, "text": json.dumps({"code": 37, "message": "您的访问环境存在异常"})}
 
 	session = DrissionCrawlerSession(
@@ -589,6 +589,9 @@ def test_crawl_honors_page_limit_and_resume_deduplicates(tmp_path):
 	stopped = service.create_and_run(_settings(tmp_path, pages=3))
 	assert stopped.status == "risk_stopped"
 	assert stopped.next_page == 2
+	# 用户完成官方目标页恢复后，先显式清除本地锁；resume 本身不能解锁。
+	cleaned = CliRunner().invoke(cli, ["--data-dir", str(tmp_path), "--json", "clean", "--risk-lock"])
+	assert cleaned.exit_code == 0, cleaned.output
 	resumed = service.resume(stopped.run_id, operating_mode="research")
 	assert resumed.status == "completed"
 	assert [item["job_key"] for item in cache.list_crawl_jobs(stopped.run_id)] == ["job-1", "job-2"]

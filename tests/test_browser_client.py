@@ -1,5 +1,7 @@
 from unittest.mock import patch, MagicMock
 
+import json
+
 import pytest
 
 import httpx
@@ -368,7 +370,9 @@ def test_request_returns_browser_evaluation_json_and_marks_throttle():
 	session._page = MagicMock()
 	session._throttle = MagicMock()
 	expected = {"code": 0, "zpData": {"jobs": []}}
-	session._page.evaluate.return_value = expected
+	session._context = MagicMock()
+	cdp = session._context.new_cdp_session.return_value
+	cdp.send.return_value = {"result": {"value": expected}}
 
 	result = session.request(
 		"POST",
@@ -380,14 +384,17 @@ def test_request_returns_browser_evaluation_json_and_marks_throttle():
 	assert result == expected
 	session._throttle.wait.assert_called_once()
 	session._throttle.mark.assert_called_once()
-	evaluate_script, evaluate_args = session._page.evaluate.call_args.args
-	assert "fetch(fetchUrl, options)" in evaluate_script
+	method, args = cdp.send.call_args.args
+	assert method == "Runtime.evaluate"
+	assert args["timeout"] == 30000
+	evaluate_args = json.loads(args["expression"].rsplit(")(", 1)[1][:-1])
 	assert evaluate_args == {
 		"method": "POST",
 		"url": "https://www.zhipin.com/wapi/zpgeek/search/joblist.json",
 		"params": {"query": "python", "page": 1},
 		"data": {"city": "101020100"},
 		"referer": "https://www.zhipin.com/web/geek/job",
+		"timeoutMs": 20000,
 	}
 
 
@@ -522,7 +529,7 @@ def test_request_does_not_hang_when_new_page_navigation_stalled():
 	# 页面恢复：有界 wait 成功后正常 evaluate，_page_ready 复位
 	mock_new_page.wait_for_load_state.side_effect = None
 	mock_new_page.wait_for_load_state.return_value = None
-	mock_new_page.evaluate.return_value = {"code": 0, "zpData": {}}
+	mock_ctx.new_cdp_session.return_value.send.return_value = {"result": {"value": {"code": 0, "zpData": {}}}}
 	res2 = session.request("GET", "https://www.zhipin.com/wapi/zpgeek/search/joblist.json")
 	assert res2["code"] == 0
 
@@ -584,6 +591,12 @@ def _started_cdp_session_with_page(page):
 	session._page_ready = True
 	session._page = page
 	session._context = MagicMock()
+
+	def evaluate(method, args):
+		assert method == "Runtime.evaluate"
+		return {"result": {"value": page.evaluate(args["expression"], None)}}
+
+	session._context.new_cdp_session.return_value.send.side_effect = evaluate
 	session._pw = MagicMock()
 	session._throttle = MagicMock()
 	return session

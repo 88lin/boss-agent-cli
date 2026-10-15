@@ -264,7 +264,7 @@ def test_mark_reports_error_when_platform_rejects(mock_auth_cls, mock_client_cls
 	assert parsed["error"]["code"] == "ACCOUNT_RISK"
 	assert parsed["error"]["message"] == "account risk"
 	assert parsed["error"]["recoverable"] is False
-	assert parsed["error"]["recovery_action"] == "停止自动化访问，回到平台官网手动处理，必要时联系客服"
+	assert parsed["error"]["recovery_action"] == "停止自动化访问，回到平台官网手动处理；确认目标业务页风险解除后，由用户执行 boss clean --risk-lock 并显式恢复任务，必要时联系客服"
 
 
 @patch("boss_agent_cli.commands.mark.get_platform_instance")
@@ -441,7 +441,7 @@ def test_exchange_reports_friend_list_error(mock_auth_cls, mock_client_cls):
 	assert parsed["error"]["code"] == "ACCOUNT_RISK"
 	assert parsed["error"]["message"] == "account risk"
 	assert parsed["error"]["recoverable"] is False
-	assert parsed["error"]["recovery_action"] == "停止自动化访问，回到平台官网手动处理，必要时联系客服"
+	assert parsed["error"]["recovery_action"] == "停止自动化访问，回到平台官网手动处理；确认目标业务页风险解除后，由用户执行 boss clean --risk-lock 并显式恢复任务，必要时联系客服"
 
 
 @patch("boss_agent_cli.commands.exchange.get_platform_instance")
@@ -861,7 +861,7 @@ def test_interviews_reports_platform_error(mock_auth_cls, mock_client_cls):
 	assert parsed["error"]["code"] == "ACCOUNT_RISK"
 	assert parsed["error"]["message"] == "account risk"
 	assert parsed["error"]["recoverable"] is False
-	assert parsed["error"]["recovery_action"] == "停止自动化访问，回到平台官网手动处理，必要时联系客服"
+	assert parsed["error"]["recovery_action"] == "停止自动化访问，回到平台官网手动处理；确认目标业务页风险解除后，由用户执行 boss clean --risk-lock 并显式恢复任务，必要时联系客服"
 
 
 @patch("boss_agent_cli.commands.interviews.get_platform_instance")

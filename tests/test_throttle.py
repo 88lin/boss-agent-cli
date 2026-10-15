@@ -29,7 +29,7 @@ def test_throttle_wait_no_delay():
 def test_throttle_burst_penalty_light():
 	"""15s 内 3+ 次请求触发轻罚"""
 	t = RequestThrottle(delay=(0.0, 0.0))
-	now = time.time()
+	now = time.monotonic()
 	for _ in range(3):
 		t._recent_times.append(now)
 	penalty = t._burst_penalty()
@@ -39,7 +39,7 @@ def test_throttle_burst_penalty_light():
 def test_throttle_burst_penalty_heavy():
 	"""45s 内 6+ 次请求触发重罚"""
 	t = RequestThrottle(delay=(0.0, 0.0))
-	now = time.time()
+	now = time.monotonic()
 	for _ in range(6):
 		t._recent_times.append(now)
 	penalty = t._burst_penalty()
@@ -50,5 +50,5 @@ def test_throttle_no_burst_penalty():
 	"""请求少时无惩罚"""
 	t = RequestThrottle(delay=(0.0, 0.0))
 	assert t._burst_penalty() == 0.0
-	t._recent_times.append(time.time())
+	t._recent_times.append(time.monotonic())
 	assert t._burst_penalty() == 0.0

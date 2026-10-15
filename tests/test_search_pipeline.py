@@ -129,6 +129,45 @@ def _welfare_conditions():
 	return [("双休", resolve_welfare_keywords("双休"))]
 
 
+@pytest.mark.parametrize("across_pages", [False, True])
+def test_pipeline_same_round_job_dedup_reduces_details_without_mixing_access_context(across_pages):
+	first = _make_job_raw(security_id="sid-first", job_id="synthetic-job", lid="lid-first")
+	rotated = _make_job_raw(security_id="sid-rotated", job_id="synthetic-job", lid="lid-rotated")
+	other = _make_job_raw(security_id="sid-other", job_id="synthetic-other", lid="lid-other")
+	pages = (
+		[{"code": 0, "zpData": {"jobList": [first], "hasMore": True}}, {"code": 0, "zpData": {"jobList": [rotated, other], "hasMore": False}}]
+		if across_pages else [{"code": 0, "zpData": {"jobList": [first, rotated, other], "hasMore": False}}]
+	)
+	client = FakeClient(pages, {"sid-first": "Synthetic 双休 description", "sid-other": "Synthetic 双休 description"})
+	result = run_search_pipeline(
+		client, FakeCache(), FakeLogger(), criteria=SearchFilterCriteria(query="Synthetic"),
+		max_pages=2, welfare_conditions=_welfare_conditions(), detail_channel="browser",
+	)
+	assert client.detail_calls == [("sid-first", "lid-first"), ("sid-other", "lid-other")]
+	assert [(item["job_id"], item["security_id"], item["lid"]) for item in result.items] == [
+		("synthetic-job", "sid-first", "lid-first"), ("synthetic-other", "sid-other", "lid-other"),
+	]
+	assert result.stats.jobs_seen == 3 and result.stats.detail_checks == 2
+	assert len(client.search_calls) == (2 if across_pages else 1)
+
+
+def test_pipeline_keeps_missing_job_ids_and_distinct_jobs_with_same_security_separate():
+	items = [
+		_make_job_raw(security_id="sid-missing-a", job_id=""),
+		_make_job_raw(security_id="sid-missing-b", job_id=""),
+		_make_job_raw(security_id="sid-shared", job_id="synthetic-a", lid="lid-a"),
+		_make_job_raw(security_id="sid-shared", job_id="synthetic-b", lid="lid-b"),
+	]
+	client = FakeClient([{"code": 0, "zpData": {"jobList": items, "hasMore": False}}], {})
+	result = run_search_pipeline(client, FakeCache(), FakeLogger(), criteria=SearchFilterCriteria(query="Synthetic"))
+	assert len(result.items) == 4
+	assert [(item["job_id"], item["security_id"], item["lid"]) for item in result.items] == [
+		("", "sid-missing-a", ""), ("", "sid-missing-b", ""),
+		("synthetic-a", "sid-shared", "lid-a"), ("synthetic-b", "sid-shared", "lid-b"),
+	]
+	assert client.detail_calls == []
+
+
 def test_pipeline_uses_detail_fallback_and_marks_greeted():
 	client = FakeClient(
 		pages=[{"zpData": {"hasMore": False, "jobList": [_make_job_raw(security_id="sec-1", job_id="job-1")]}}],
@@ -271,6 +310,125 @@ def test_pipeline_skip_greeted_filters_detail_matched_items():
 	)
 
 	assert result.items == []
+	assert client.detail_calls == []
+	assert result.stats.detail_checks == 0
+	assert result.stats.detail_requests == 0
+
+
+def test_pipeline_limit_stops_serial_details_after_enough_matches(monkeypatch):
+	from boss_agent_cli import search_filters
+
+	def reject_parallel(*args, **kwargs):
+		raise AssertionError("limited enrichment must be serial")
+
+	monkeypatch.setattr(search_filters, "ThreadPoolExecutor", reject_parallel)
+	client = FakeClient(
+		pages=[{"zpData": {"hasMore": True, "jobList": [
+			_make_job_raw(security_id=f"sec-{i}", job_id=f"job-{i}", lid=f"lid-{i}")
+			for i in range(4)
+		]}}],
+		descriptions={"sec-0": "周末双休"},
+	)
+	waits = []
+	result = run_search_pipeline(
+		client, FakeCache(), FakeLogger(), criteria=SearchFilterCriteria(query="python"),
+		welfare_conditions=_welfare_conditions(), limit=1, max_pages=5,
+		before_detail_request=lambda: waits.append("wait"),
+	)
+	assert [item["job_id"] for item in result.items] == ["job-0"]
+	assert client.detail_calls == [("sec-0", "lid-0")]
+	assert len(client.search_calls) == 1
+	assert waits == ["wait"]
+	assert result.stats.detail_checks == result.stats.detail_requests == 1
+
+
+def test_pipeline_skips_greeted_before_activity_or_welfare_enrichment():
+	jobs = [_make_job_raw(security_id=f"sec-{i}", job_id=f"job-{i}") for i in range(4)]
+	for job in jobs:
+		job["bossOnline"] = False
+	client = FakeClient(pages=[{"zpData": {"hasMore": False, "jobList": jobs}}], descriptions={})
+	result = run_search_pipeline(
+		client, FakeCache({f"sec-{i}" for i in range(4)}), FakeLogger(),
+		criteria=SearchFilterCriteria(query="python"), welfare_conditions=_welfare_conditions(),
+		active="today", skip_greeted=True, detail_channel="browser",
+	)
+	assert result.items == []
+	assert client.detail_calls == []
+	assert result.stats.detail_checks == result.stats.detail_requests == 0
+
+
+def test_pipeline_reuses_cached_description_before_remaining_network_details():
+	client = FakeClient(
+		pages=[{"zpData": {"hasMore": False, "jobList": [
+			_make_job_raw(security_id=f"sec-{i}", job_id=f"job-{i}") for i in range(4)
+		]}}],
+		descriptions={"sec-1": "单休", "sec-2": "周末双休"},
+	)
+	cache = FakeCache(descs={"job-0": "周末双休"})
+	result = run_search_pipeline(
+		client, cache, FakeLogger(), criteria=SearchFilterCriteria(query="python"),
+		welfare_conditions=_welfare_conditions(), limit=2, detail_channel="browser",
+	)
+	assert [item["job_id"] for item in result.items] == ["job-0", "job-2"]
+	assert client.detail_calls == [("sec-1", ""), ("sec-2", "")]
+	assert result.stats.detail_checks == 3
+	assert result.stats.detail_requests == 2
+	assert ("job-0", "周末双休") not in cache.put_calls
+
+
+def test_pipeline_sufficient_list_tags_skip_remaining_detail_work():
+	client = FakeClient(
+		pages=[{"zpData": {"hasMore": False, "jobList": [
+			_make_job_raw(security_id="sec-detail", job_id="job-detail"),
+			_make_job_raw(security_id="sec-list", job_id="job-list", welfare=["双休"]),
+		]}}],
+		descriptions={},
+	)
+	result = run_search_pipeline(
+		client, FakeCache(), FakeLogger(), criteria=SearchFilterCriteria(query="python"),
+		welfare_conditions=_welfare_conditions(), limit=1, detail_channel="browser",
+	)
+	assert [item["job_id"] for item in result.items] == ["job-list"]
+	assert client.detail_calls == []
+	assert result.stats.detail_checks == result.stats.detail_requests == 0
+
+
+def test_pipeline_mixed_enrichment_keeps_list_order():
+	client = FakeClient(
+		pages=[{"zpData": {"hasMore": False, "jobList": [
+			_make_job_raw(security_id="sec-network", job_id="job-network"),
+			_make_job_raw(security_id="sec-tag", job_id="job-tag", welfare=["双休"]),
+			_make_job_raw(security_id="sec-cache", job_id="job-cache"),
+		]}}],
+		descriptions={"sec-network": "周末双休"},
+	)
+	result = run_search_pipeline(
+		client, FakeCache(descs={"job-cache": "周末双休"}), FakeLogger(),
+		criteria=SearchFilterCriteria(query="python"), welfare_conditions=_welfare_conditions(),
+		limit=3, detail_channel="browser",
+	)
+	assert [item["job_id"] for item in result.items] == ["job-network", "job-tag", "job-cache"]
+	assert client.detail_calls == [("sec-network", "")]
+
+
+@pytest.mark.parametrize("raw_risk", [False, True])
+def test_pipeline_limited_detail_risk_stops_later_work(raw_risk):
+	from boss_agent_cli.api.client import AccountRiskError
+
+	error = {"code": 36, "message": "synthetic risk", "error_code": "ACCOUNT_RISK"} if raw_risk else AccountRiskError("synthetic risk")
+	client = FakeClient(
+		pages=[{"zpData": {"hasMore": True, "jobList": [
+			_make_job_raw(security_id=f"sec-{i}", job_id=f"job-{i}") for i in range(3)
+		]}}],
+		descriptions={"sec-0": error},
+	)
+	with pytest.raises(SearchPipelinePlatformError if raw_risk else AccountRiskError):
+		run_search_pipeline(
+			client, FakeCache(), FakeLogger(), criteria=SearchFilterCriteria(query="python"),
+			welfare_conditions=_welfare_conditions(), limit=2, max_pages=5,
+		)
+	assert client.detail_calls == [("sec-0", "")]
+	assert len(client.search_calls) == 1
 
 
 def test_pipeline_stops_after_limit_during_welfare_search():

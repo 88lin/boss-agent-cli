@@ -151,7 +151,7 @@ def test_login_via_browser_tolerates_networkidle_timeout(mock_sleep, mock_extrac
 	assert result["stoken"] == "fresh-stoken"
 	assert result["user_agent"] == "UA"
 	mock_browser.new_context.assert_called_once()
-	mock_page.goto.assert_any_call(LOGIN_PAGE_URL, wait_until="domcontentloaded")
+	mock_page.goto.assert_any_call(LOGIN_PAGE_URL, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
 	mock_page.goto.assert_any_call(HOME_URL, wait_until="domcontentloaded", timeout=_NAV_TIMEOUT_MS)
 	mock_page.wait_for_load_state.assert_called_once_with("networkidle", timeout=_NETWORKIDLE_GRACE_MS)
 	mock_extract_stoken.assert_called_once_with(mock_page)
@@ -290,7 +290,12 @@ def test_warm_home_for_runtime_retries_and_recovers_when_goto_stalls_then_succee
 def test_warm_home_for_runtime_returns_false_after_all_retries_exhausted():
 	mock_page = MagicMock()
 	# 两次 goto 均卡住；about:blank 重置成功但无法恢复首页
-	mock_page.goto.side_effect = [TimeoutError("Timeout 15000ms exceeded"), None, TimeoutError("Timeout 15000ms exceeded"), None]
+	mock_page.goto.side_effect = [
+		TimeoutError("Timeout 15000ms exceeded"),
+		None,
+		TimeoutError("Timeout 15000ms exceeded"),
+		None,
+	]
 	mock_page.wait_for_load_state.side_effect = Exception("Timeout 3000ms exceeded")
 
 	assert _warm_home_for_runtime(mock_page, HOME_URL, stage="test") is False
@@ -659,10 +664,12 @@ def test_login_via_cdp_default_still_reuses_without_clearing(mock_sleep, mock_pr
 
 def _evaluate_router(probe_result):
 	"""UA 采集与探测共用 page.evaluate：按脚本内容分流。"""
+
 	def _route(script, arg=None):
 		if "fetch(" in script:
 			return probe_result
 		return "UA"
+
 	return _route
 
 

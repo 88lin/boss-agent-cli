@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 
 from boss_agent_cli.api import endpoints
-from boss_agent_cli.api.client import AuthError, BossClient
+from boss_agent_cli.api.client import AccountRiskError, BossClient, EnvironmentRiskError
 
 
 class FakeCookieJar:
@@ -21,7 +21,9 @@ class FakeCookieJar:
 
 
 class FakeResponse:
-	def __init__(self, *, status_code: int = 200, payload: dict | None = None, text: str = "", cookies: dict | None = None):
+	def __init__(
+		self, *, status_code: int = 200, payload: dict | None = None, text: str = "", cookies: dict | None = None
+	):
 		self.status_code = status_code
 		self._payload = payload or {"code": 0}
 		self.text = text
@@ -82,7 +84,7 @@ def test_request_get_adds_stoken_and_merges_cookies():
 @patch("boss_agent_cli.api._base_client.random.uniform", return_value=0)
 @patch("boss_agent_cli.api._base_client.time.sleep")
 @patch("boss_agent_cli.api._base_client.httpx.Client")
-def test_request_retries_after_403_and_refreshes_token(mock_http_client_cls, mock_sleep, mock_uniform):
+def test_request_403_stops_without_refresh_or_retry(mock_http_client_cls, mock_sleep, mock_uniform):
 	auth = FakeAuthManager()
 	first = FakeHttpxClient([FakeResponse(status_code=403, text="forbidden")])
 	second = FakeHttpxClient([FakeResponse(payload={"code": 0, "zpData": {"ok": True}})])
@@ -92,12 +94,13 @@ def test_request_retries_after_403_and_refreshes_token(mock_http_client_cls, moc
 	client._throttle.wait = lambda: None
 	client._throttle.mark = lambda: None
 
-	data = client._request("GET", endpoints.USER_INFO_URL)
+	with pytest.raises(AccountRiskError, match="HTTP 403"):
+		client._request("GET", endpoints.USER_INFO_URL)
 
-	assert data["zpData"]["ok"] is True
-	assert auth.refresh_calls == [None]
-	assert mock_sleep.call_args_list[0].args[0] == 1
-	assert second.calls[0]["kwargs"]["params"]["__zp_stoken__"] == "refreshed-1"
+	assert len(first.calls) == 1
+	assert second.calls == []
+	assert auth.refresh_calls == []
+	mock_sleep.assert_not_called()
 
 
 @patch("boss_agent_cli.api._base_client.random.uniform", return_value=0)
@@ -117,14 +120,15 @@ def test_request_retries_after_stoken_expired_code(mock_http_client_cls, mock_sl
 
 	assert data["zpData"]["ok"] is True
 	assert auth.refresh_calls == [None]
-	assert mock_sleep.call_args_list[0].args[0] == 1
+	assert sum(call.args[0] for call in mock_sleep.call_args_list) == pytest.approx(1)
+	assert max(call.args[0] for call in mock_sleep.call_args_list) <= 0.1
 	assert second.calls[0]["kwargs"]["params"]["__zp_stoken__"] == "refreshed-1"
 
 
 @patch("boss_agent_cli.api._base_client.time.sleep")
 @patch("boss_agent_cli.api._base_client.httpx.Client")
 def test_request_ambiguous_code_37_does_not_refresh(mock_http_client_cls, mock_sleep):
-	"""语义不明的 code 37 fail closed：不刷新、不 sleep，原样返回响应字典。"""
+	"""语义不明的 code 37 fail closed：不刷新、不 sleep，抛出环境风险。"""
 	auth = FakeAuthManager()
 	http_client = FakeHttpxClient([FakeResponse(payload={"code": endpoints.CODE_STOKEN_EXPIRED})])
 	mock_http_client_cls.return_value = http_client
@@ -133,9 +137,10 @@ def test_request_ambiguous_code_37_does_not_refresh(mock_http_client_cls, mock_s
 	client._throttle.wait = lambda: None
 	client._throttle.mark = lambda: None
 
-	data = client._request("GET", endpoints.USER_INFO_URL)
+	with pytest.raises(EnvironmentRiskError):
+		client._request("GET", endpoints.USER_INFO_URL)
 
-	assert data["code"] == endpoints.CODE_STOKEN_EXPIRED
+	assert len(http_client.calls) == 1
 	assert auth.refresh_calls == []
 	mock_sleep.assert_not_called()
 
@@ -160,13 +165,14 @@ def test_request_retries_after_rate_limited_code(mock_http_client_cls, mock_slee
 
 	assert data["zpData"]["ok"] is True
 	assert auth.refresh_calls == []
-	assert mock_sleep.call_args_list[0].args[0] == 10
+	assert sum(call.args[0] for call in mock_sleep.call_args_list) == pytest.approx(10)
+	assert max(call.args[0] for call in mock_sleep.call_args_list) <= 0.1
 
 
 @patch("boss_agent_cli.api._base_client.random.uniform", return_value=0)
 @patch("boss_agent_cli.api._base_client.time.sleep")
 @patch("boss_agent_cli.api._base_client.httpx.Client")
-def test_request_raises_auth_error_after_max_403_retries(mock_http_client_cls, mock_sleep, mock_uniform):
+def test_request_403_does_not_consume_retry_budget(mock_http_client_cls, mock_sleep, mock_uniform):
 	auth = FakeAuthManager()
 	mock_http_client_cls.side_effect = [
 		FakeHttpxClient([FakeResponse(status_code=403, text="forbidden")]),
@@ -179,10 +185,12 @@ def test_request_raises_auth_error_after_max_403_retries(mock_http_client_cls, m
 	client._throttle.wait = lambda: None
 	client._throttle.mark = lambda: None
 
-	with pytest.raises(AuthError, match="Token 刷新后仍被拒绝，请重新登录"):
+	with pytest.raises(AccountRiskError, match="HTTP 403"):
 		client._request("GET", endpoints.USER_INFO_URL)
 
-	assert auth.refresh_calls == [None, None, None]
+	assert auth.refresh_calls == []
+	assert mock_http_client_cls.call_count == 1
+	mock_sleep.assert_not_called()
 
 
 @patch("boss_agent_cli.api._base_client.httpx.Client")

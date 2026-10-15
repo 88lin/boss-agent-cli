@@ -8,8 +8,10 @@ from boss_agent_cli.schema.data import SCHEMA_DATA
 from boss_agent_cli.schema.formats import (
 	command_to_json_schema,
 	format_anthropic_tools,
+	format_mcp_tools,
 	format_openai_tools,
 )
+from boss_agent_cli.schema.tool_catalog import build_tool_catalog
 from boss_agent_cli.main import cli
 
 
@@ -20,6 +22,7 @@ def test_native_format_is_default():
 	assert result.exit_code == 0
 	data = json.loads(result.output)["data"]
 	assert "commands" in data
+	assert len(data["commands"]) == len(SCHEMA_DATA["commands"])
 	assert "error_codes" in data
 	assert "format" not in data  # native 格式不带 format 字段
 
@@ -32,7 +35,7 @@ def test_openai_tools_format():
 	data = json.loads(result.output)["data"]
 	assert data["format"] == "openai-tools"
 	tools = data["tools"]
-	assert len(tools) == len(SCHEMA_DATA["commands"])
+	assert len(tools) == len(build_tool_catalog())
 	for tool in tools:
 		assert tool["type"] == "function"
 		assert "function" in tool
@@ -51,7 +54,7 @@ def test_anthropic_tools_format():
 	data = json.loads(result.output)["data"]
 	assert data["format"] == "anthropic-tools"
 	tools = data["tools"]
-	assert len(tools) == len(SCHEMA_DATA["commands"])
+	assert len(tools) == len(build_tool_catalog())
 	for tool in tools:
 		assert tool["name"].startswith("boss_")
 		assert tool["description"]
@@ -81,13 +84,34 @@ def test_tool_formats_keep_search_welfare_parameter():
 	assert "福利筛选" in anth_search["properties"]["welfare"]["description"]
 
 
-def test_tool_formats_ignore_nested_shortlist_option_groups():
-	"""分组命令的子命令 option 元数据不应被误导出为顶层工具参数。"""
+def test_tool_formats_describe_explicit_agent_resume():
+	parameters = [
+		next(tool["function"]["parameters"] for tool in format_openai_tools(SCHEMA_DATA) if tool["function"]["name"] == "boss_agent_run"),
+		next(tool["input_schema"] for tool in format_anthropic_tools(SCHEMA_DATA) if tool["name"] == "boss_agent_run"),
+		next(tool["inputSchema"] for tool in format_mcp_tools(SCHEMA_DATA) if tool["name"] == "boss_agent_run"),
+	]
+	for schema in parameters:
+		resume = schema["properties"]["resume"]
+		assert resume["type"] == "boolean"
+		assert resume["default"] is False
+		assert "官方验证" in resume["description"]
+		assert "操作者明确确认" in resume["description"]
+
+
+def test_tool_formats_expose_callable_shortlist_subcommands():
+	"""导出实际可调用的子命令，不生成运行时不存在的分组工具。"""
 	oai = format_openai_tools(SCHEMA_DATA)
-	shortlist = next(t["function"]["parameters"] for t in oai if t["function"]["name"] == "boss_shortlist")
-	assert "add" not in shortlist["properties"]
-	assert "annotate" not in shortlist["properties"]
-	assert "compare" not in shortlist["properties"]
+	tools = {tool["function"]["name"]: tool["function"]["parameters"] for tool in oai}
+	assert "boss_shortlist" not in tools
+	assert {
+		"boss_shortlist_list", "boss_shortlist_add", "boss_shortlist_remove",
+		"boss_shortlist_annotate", "boss_shortlist_compare",
+	} <= tools.keys()
+	assert tools["boss_shortlist_add"]["required"] == ["security_id", "job_id"]
+	assert "tag" in tools["boss_shortlist_compare"]["properties"]
+	for name, schema in tools.items():
+		if name.startswith("boss_shortlist_"):
+			assert {"add", "annotate", "compare"}.isdisjoint(schema["properties"])
 
 
 def test_command_to_json_schema_required_args():

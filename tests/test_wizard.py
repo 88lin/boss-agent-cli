@@ -2075,13 +2075,17 @@ def test_prompt_toolkit_pty_uses_stderr_and_arrow_keys(tmp_path):
 				if not chunk:
 					break
 				output.extend(chunk)
-		if process.poll() is None:
+		# PTY 的 EOF 可以先于 waitpid 观察到退出。读取结束仍须用剩余时限
+		# 等待进程，不能提前把正常终端关闭报成「选中后未退出」。
+		try:
+			process.wait(timeout=max(0.0, completion_deadline - time.monotonic()))
+		except subprocess.TimeoutExpired:
 			process.kill()
+			process.wait(timeout=2)
 			pytest.fail(
 				f"prompt_toolkit PTY 在选中后 {_PTY_EXIT_TIMEOUT}s 内未退出；"
 				f"已捕获输出：{output.decode('utf-8', errors='replace')!r}"
 			)
-		process.wait(timeout=2)
 		while True:
 			ready, _, _ = select.select([stderr_master_fd], [], [], 0.05)
 			if not ready:
@@ -2109,6 +2113,7 @@ def test_prompt_toolkit_pty_uses_stderr_and_arrow_keys(tmp_path):
 		os.close(stdout_master_fd)
 		if process.poll() is None:
 			process.kill()
+		process.wait(timeout=2)
 
 	stderr_text = output.decode("utf-8", errors="replace")
 	assert process.returncode == 0

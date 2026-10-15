@@ -108,7 +108,7 @@ def test_unavailable_page_returns_exchange_not_available(exchange_type, label):
 def test_precheck_args_passed_to_page():
 	client, browser = _client({"ok": True, "componentName": "ExchangeWx", "confirmed": "not_required", "log": []},
 		history=WITH_SELF, events=[{"kind": "ws_send", "bytes": 194, "utf8_bits": ["请求交换联系方式"]}])
-	assert client.exchange_request_by_friend(FRIEND_ID, exchange_type=2)["code"] == 0
+	assert client.exchange_request_by_friend(FRIEND_ID, exchange_type=2)["__cli_error_code__"] == "ACTION_UNCONFIRMED"
 	args = browser.evaluate_js_with_chat_events.call_args[0][1]
 	assert args["checkAvailability"] is True
 	assert args["selfMessageInHistory"] is True
@@ -118,7 +118,7 @@ def test_precheck_args_passed_to_page():
 def test_resume_request_skips_precheck():
 	client, browser = _client({"ok": True, "componentName": "ExchangeResume", "confirmed": True, "log": []},
 		events=[{"kind": "ws_send", "bytes": 194, "utf8_bits": ["想要一份您的附件简历"]}])
-	assert client.exchange_request_by_friend(FRIEND_ID, exchange_type=4)["code"] == 0
+	assert client.exchange_request_by_friend(FRIEND_ID, exchange_type=4)["__cli_error_code__"] == "ACTION_UNCONFIRMED"
 	assert browser.evaluate_js_with_chat_events.call_args[0][1]["checkAvailability"] is False
 	client.close()
 

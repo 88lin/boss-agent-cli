@@ -224,7 +224,7 @@ def test_schema_environment_risk_is_terminal():
 	"""ENVIRONMENT_RISK 必须是不可恢复的终止分支，恢复动作指向停止自动化。"""
 	spec = SCHEMA_DATA["error_codes"]["ENVIRONMENT_RISK"]
 	assert spec["recoverable"] is False
-	assert spec["recovery_action"] == "停止自动化访问；保留当前专用 profile，在官方页面确认并降低访问频率"
+	assert spec["recovery_action"] == "停止自动化访问；保留原会话，在官方目标业务页确认风险解除后，由用户执行 boss clean --risk-lock 并显式恢复任务，降低访问频率"
 	assert spec["message"] == "访问环境存在异常"
 
 

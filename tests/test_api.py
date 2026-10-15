@@ -1,7 +1,11 @@
 from boss_agent_cli.api.endpoints import (
-	CITY_CODES, SALARY_CODES, EXPERIENCE_CODES,
+	CITY_CODES,
+	SALARY_CODES,
+	EXPERIENCE_CODES,
 	JOB_TYPE_CODES,
-	CODE_ACCOUNT_RISK, CODE_STOKEN_EXPIRED, CODE_RATE_LIMITED,
+	CODE_ACCOUNT_RISK,
+	CODE_STOKEN_EXPIRED,
+	CODE_RATE_LIMITED,
 	USER_INFO_URL,
 )
 from boss_agent_cli.api.models import JobDetail, JobItem
@@ -154,11 +158,13 @@ def test_account_risk_error_raised_on_code_36():
 	client._browser_session = mock_browser
 
 	import pytest
+
 	with pytest.raises(AccountRiskError) as exc_info:
 		client._browser_request("GET", "/wapi/zpgeek/search/joblist.json")
 
-	assert "code 36" in str(exc_info.value)
-	assert "风控拦截" in str(exc_info.value)
+	assert str(exc_info.value) == "您的账户存在异常行为."
+	assert exc_info.value.code == "ACCOUNT_RISK"
+	assert exc_info.value.details["platform_code"] == 36
 	assert exc_info.value.is_cdp is False
 	client.close()
 
@@ -283,11 +289,11 @@ def test_browser_channel_never_refreshes_on_any_code_37():
 		client.close()
 
 
-def test_httpx_ambiguous_code_37_returns_dict_without_refresh():
-	"""httpx 通道：语义不明的 code 37 不刷新、不 sleep，按响应字典原样返回。"""
+def test_httpx_ambiguous_code_37_raises_risk_without_refresh():
+	"""httpx 通道：语义不明的 code 37 不刷新、不 sleep，原样传播环境风险。"""
 	from unittest.mock import MagicMock, patch
 
-	from boss_agent_cli.api.client import BossClient
+	from boss_agent_cli.api.client import BossClient, EnvironmentRiskError
 
 	auth = MagicMock()
 	client = BossClient(auth)
@@ -295,16 +301,19 @@ def test_httpx_ambiguous_code_37_returns_dict_without_refresh():
 	client._throttle.mark = lambda: None
 	mock_httpx = MagicMock()
 	mock_httpx.request.return_value = MagicMock(
-		status_code=200, text="", cookies=MagicMock(),
+		status_code=200,
+		text="",
+		cookies=MagicMock(),
 		json=lambda: {"code": CODE_STOKEN_EXPIRED, "message": "请求失败"},
 	)
 	mock_httpx.cookies = MagicMock()
 	client._client = mock_httpx
 
 	with patch("boss_agent_cli.api._base_client.time.sleep") as mock_sleep:
-		data = client._request("GET", USER_INFO_URL)
+		with pytest.raises(EnvironmentRiskError):
+			client._request("GET", USER_INFO_URL)
 
-	assert data["code"] == CODE_STOKEN_EXPIRED
+	mock_httpx.request.assert_called_once()
 	auth.force_refresh.assert_not_called()
 	mock_sleep.assert_not_called()
 	client.close()
@@ -337,8 +346,10 @@ def test_job_card_with_httpx_fallback():
 	client = BossClient(auth)
 
 	browser_result = {"code": 0, "zpData": {"jobCard": {"jobName": "浏览器结果"}}}
-	with patch.object(client, "job_card_httpx", side_effect=Exception("httpx failed")), \
-		patch.object(client, "_browser_request", return_value=browser_result) as mock_browser:
+	with (
+		patch.object(client, "job_card_httpx", side_effect=Exception("httpx failed")),
+		patch.object(client, "_browser_request", return_value=browser_result) as mock_browser,
+	):
 		result = client.job_card("sec123", lid="lid1")
 	assert result == browser_result
 	mock_browser.assert_called_once()

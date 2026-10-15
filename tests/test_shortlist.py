@@ -113,6 +113,7 @@ def test_shortlist_compare_filters_by_tag_locally(tmp_path):
 		{
 			"security_id": "sec_001",
 			"job_id": "job_001",
+			"lid": "",
 			"title": "Go 开发",
 			"company": "TestCo",
 			"city": "广州",
@@ -163,4 +164,5 @@ def test_shortlist_schema_is_exposed():
 	assert "compare" in shortlist["subcommands"]
 	assert "--tags" in shortlist["options"]["add"]
 	assert "--note" in shortlist["options"]["add"]
+	assert shortlist["options"]["add"]["--lid"]["default"] == ""
 	assert "--tag" in shortlist["options"]["compare"]

@@ -297,7 +297,7 @@ def test_recruiter_applications_reports_error_when_platform_rejects(mock_auth_cl
 		code="ACCOUNT_RISK",
 		message="account risk",
 		recoverable=False,
-		recovery_action="停止自动化访问，回到平台官网手动处理，必要时联系客服",
+		recovery_action="停止自动化访问，回到平台官网手动处理；确认目标业务页风险解除后，由用户执行 boss clean --risk-lock 并显式恢复任务，必要时联系客服",
 	)
 
 
@@ -546,7 +546,7 @@ def test_recruiter_request_resume_reports_error_when_platform_rejects(mock_auth_
 		code="ACCOUNT_RISK",
 		message="account risk",
 		recoverable=False,
-		recovery_action="停止自动化访问，回到平台官网手动处理，必要时联系客服",
+		recovery_action="停止自动化访问，回到平台官网手动处理；确认目标业务页风险解除后，由用户执行 boss clean --risk-lock 并显式恢复任务，必要时联系客服",
 	)
 
 

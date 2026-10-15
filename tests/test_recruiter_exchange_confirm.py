@@ -1,4 +1,5 @@
 """#443：招聘者交换联系方式 / 求简历的成功判定、确认按钮作用域与诊断信息。"""
+
 import json
 import shutil
 import subprocess
@@ -17,7 +18,18 @@ from boss_agent_cli.schema.error_codes import ERROR_CODES
 FRIEND_ID = 1
 FRIEND_DETAIL = {
 	"code": 0,
-	"zpData": {"friendList": [{"uid": FRIEND_ID, "encryptUid": "u", "encryptJobId": "j", "securityId": "s", "name": "Tester", "friendSource": 0}]},
+	"zpData": {
+		"friendList": [
+			{
+				"uid": FRIEND_ID,
+				"encryptUid": "u",
+				"encryptJobId": "j",
+				"securityId": "s",
+				"name": "Tester",
+				"friendSource": 0,
+			}
+		]
+	},
 }
 OLD_MESSAGE = {"mid": 100, "time": 1, "from": {"uid": 9, "source": 0}, "body": {"type": 1, "text": "你好"}}
 
@@ -36,6 +48,7 @@ def _no_retry_sleep(monkeypatch):
 def _client(*, page, events=(), histories=(_history(OLD_MESSAGE), _history(OLD_MESSAGE))):
 	"""friend_detail 与 chat_history（动作前快照 + 动作后回读/轮询）都走 mock；回读次数超出时重复最后一份。"""
 	client = BossRecruiterClient(MagicMock())
+	client._throttle = MagicMock()
 	client.friend_detail = MagicMock(return_value=FRIEND_DETAIL)
 	queue = list(histories)
 
@@ -53,7 +66,13 @@ def _client(*, page, events=(), histories=(_history(OLD_MESSAGE), _history(OLD_M
 
 
 def _page(component="ExchangeResume", confirmed=True):
-	return {"ok": True, "error": None, "componentName": component, "confirmed": confirmed, "log": ["handleExChange returned", f"confirm clicked={confirmed}"]}
+	return {
+		"ok": True,
+		"error": None,
+		"componentName": component,
+		"confirmed": confirmed,
+		"log": ["handleExChange returned", f"confirm clicked={confirmed}"],
+	}
 
 
 def _ws(*bits):
@@ -78,16 +97,21 @@ def test_page_ok_without_evidence_is_action_unconfirmed_not_unexpected_page_resu
 	client.close()
 
 
-def test_new_resume_request_text_counts_as_ws_evidence():
+def test_new_resume_request_text_is_attempt_only_without_history():
 	client, _ = _client(page=_page(), events=[_ws("想要一份您的附件简历")])
 	result = client.exchange_request_by_friend(FRIEND_ID, exchange_type=4)
-	assert result["code"] == 0
-	assert result["zpData"]["matched_ws_count"] == 1
+	assert result["__cli_error_code__"] == "ACTION_UNCONFIRMED"
+	assert result["zpData"]["ws_evidence"]["matched_ws_count"] == 1
 	client.close()
 
 
 def test_chat_history_confirms_when_ws_frame_has_no_text():
-	new_message = {"mid": 101, "time": 2, "from": {"uid": 9, "source": 0}, "body": {"type": 7, "dialog": {"text": "想要一份您的附件简历"}}}
+	new_message = {
+		"mid": 101,
+		"time": 2,
+		"from": {"uid": 9, "source": 0},
+		"body": {"type": 7, "dialog": {"text": "想要一份您的附件简历"}},
+	}
 	client, _ = _client(
 		page=_page(),
 		events=[_ws("binary-only")],
@@ -103,7 +127,12 @@ def test_chat_history_confirms_when_ws_frame_has_no_text():
 
 
 def test_chat_history_ignores_messages_that_existed_before_action():
-	old_request = {"mid": 100, "time": 1, "from": {"uid": 9, "source": 0}, "body": {"type": 1, "text": "想要一份您的附件简历"}}
+	old_request = {
+		"mid": 100,
+		"time": 1,
+		"from": {"uid": 9, "source": 0},
+		"body": {"type": 1, "text": "想要一份您的附件简历"},
+	}
 	client, _ = _client(page=_page(), histories=[_history(old_request), _history(old_request)])
 	result = client.exchange_request_by_friend(FRIEND_ID, exchange_type=4)
 	assert result["__cli_error_code__"] == "ACTION_UNCONFIRMED"
@@ -128,7 +157,11 @@ def test_history_read_failure_after_action_is_unconfirmed_with_diagnostics():
 
 
 def test_wechat_exchange_uses_only_exchangewx_and_reports_resume_side_effect():
-	client, browser = _client(page=_page("ExchangeWx", "not_required"), events=[_ws("请求交换联系方式")])
+	client, browser = _client(
+		page=_page("ExchangeWx", "not_required"),
+		events=[_ws("请求交换联系方式")],
+		histories=[_history(OLD_MESSAGE), _history(OLD_MESSAGE, _card(101, 32))],
+	)
 	result = client.exchange_request_by_friend(FRIEND_ID, exchange_type=2)
 	assert result["code"] == 0
 	assert "side_effects" not in result["zpData"]
@@ -138,7 +171,11 @@ def test_wechat_exchange_uses_only_exchangewx_and_reports_resume_side_effect():
 	assert "ExchangeResume" not in script
 	client.close()
 
-	client, _ = _client(page=_page("ExchangeWx"), events=[_ws("请求交换联系方式"), _ws("想要一份您的附件简历")])
+	client, _ = _client(
+		page=_page("ExchangeWx"),
+		events=[_ws("请求交换联系方式"), _ws("想要一份您的附件简历")],
+		histories=[_history(OLD_MESSAGE), _history(OLD_MESSAGE, _card(101, 32))],
+	)
 	result = client.exchange_request_by_friend(FRIEND_ID, exchange_type=2)
 	assert result["zpData"]["side_effects"] == ["resume_request_detected"]
 	client.close()
@@ -208,6 +245,7 @@ def test_ws_text_frame_is_not_base64_decoded():
 	text = '{"type":1,"text":"想要一份您的附件简历"}'
 	assert _ws_frame_payload_bytes({"opcode": 1, "payloadData": text}).decode("utf-8") == text
 	import base64
+
 	raw = "二进制帧里的请求交换联系方式".encode("utf-8")
 	assert _ws_frame_payload_bytes({"opcode": 2, "payloadData": base64.b64encode(raw).decode()}) == raw
 	assert _ws_frame_payload_bytes({"opcode": 1, "payloadData": None}) == b""
@@ -226,8 +264,10 @@ def test_cli_envelope_carries_action_unconfirmed_and_details():
 	context = MagicMock()
 	context.__enter__ = MagicMock(return_value=platform)
 	context.__exit__ = MagicMock(return_value=None)
-	with patch("boss_agent_cli.commands.recruiter.request_resume.get_recruiter_platform_instance", return_value=context), \
-		patch("boss_agent_cli.commands.recruiter.request_resume.AuthManager"):
+	with (
+		patch("boss_agent_cli.commands.recruiter.request_resume.get_recruiter_platform_instance", return_value=context),
+		patch("boss_agent_cli.commands.recruiter.request_resume.AuthManager"),
+	):
 		result = CliRunner().invoke(cli, ["--role", "recruiter", "--json", "hr", "request-resume", str(FRIEND_ID)])
 	assert result.exit_code == 1
 	error = json.loads(result.output)["error"]
@@ -291,13 +331,18 @@ def test_history_is_polled_until_action_card_lands(_no_retry_sleep):
 	# 消息落库晚于 WS 监听窗口：前两次回读还没有，第三次出现。
 	client, _ = _client(
 		page=_page("ExchangeWx", "not_required"),
-		histories=[_history(OLD_MESSAGE), _history(OLD_MESSAGE), _history(OLD_MESSAGE),
-			_history(OLD_MESSAGE, _card(101, 32))],
+		histories=[
+			_history(OLD_MESSAGE),
+			_history(OLD_MESSAGE),
+			_history(OLD_MESSAGE),
+			_history(OLD_MESSAGE, _card(101, 32)),
+		],
 	)
 	result = client.exchange_request_by_friend(FRIEND_ID, exchange_type=2)
 	assert result["code"] == 0
 	assert result["zpData"]["history_attempts"] == 3
-	assert _no_retry_sleep == [1.5, 2.0]
+	assert sum(_no_retry_sleep) == pytest.approx(3.5)
+	assert all(0 < seconds <= 0.1 for seconds in _no_retry_sleep)
 	client.close()
 
 
@@ -311,10 +356,11 @@ def test_unconfirmed_after_all_history_retries(_no_retry_sleep):
 	client.close()
 
 
-def test_no_history_retry_when_ws_already_confirms(_no_retry_sleep):
+def test_ws_only_still_needs_bounded_history_confirmation(_no_retry_sleep):
 	client, _ = _client(page=_page("ExchangeWx"), events=[_ws("请求交换联系方式")])
-	assert client.exchange_request_by_friend(FRIEND_ID, exchange_type=2)["code"] == 0
-	assert _no_retry_sleep == []
+	assert client.exchange_request_by_friend(FRIEND_ID, exchange_type=2)["__cli_error_code__"] == "ACTION_UNCONFIRMED"
+	assert sum(_no_retry_sleep) == pytest.approx(6.0)
+	assert all(0 < seconds <= 0.1 for seconds in _no_retry_sleep)
 	client.close()
 
 
@@ -329,7 +375,9 @@ def test_no_history_retry_when_ws_already_confirms(_no_retry_sleep):
 	],
 )
 def test_wechat_action_card_matching_is_strict(card, reason):
-	client, _ = _client(page=_page("ExchangeWx", "not_required"), histories=[_history(OLD_MESSAGE), _history(OLD_MESSAGE, card)])
+	client, _ = _client(
+		page=_page("ExchangeWx", "not_required"), histories=[_history(OLD_MESSAGE), _history(OLD_MESSAGE, card)]
+	)
 	result = client.exchange_request_by_friend(FRIEND_ID, exchange_type=2)
 	assert result["__cli_error_code__"] == "ACTION_UNCONFIRMED", reason
 	client.close()
@@ -347,22 +395,28 @@ def test_wechat_exchange_reports_resume_card_as_side_effect():
 	client.close()
 
 
-def test_phone_exchange_accepts_unknown_aid_but_not_known_other_types():
-	client, _ = _client(page=_page("ExchangePhone"), histories=[_history(OLD_MESSAGE), _history(OLD_MESSAGE, _card(101, 31))])
-	assert client.exchange_request_by_friend(FRIEND_ID, exchange_type=1)["code"] == 0
+def test_phone_exchange_does_not_infer_unknown_aid_or_other_types():
+	client, _ = _client(
+		page=_page("ExchangePhone"), histories=[_history(OLD_MESSAGE), _history(OLD_MESSAGE, _card(101, 31))]
+	)
+	assert client.exchange_request_by_friend(FRIEND_ID, exchange_type=1)["__cli_error_code__"] == "ACTION_UNCONFIRMED"
 	client.close()
 	for aid in (32, 37):
-		client, _ = _client(page=_page("ExchangePhone"), histories=[_history(OLD_MESSAGE), _history(OLD_MESSAGE, _card(101, aid))])
-		assert client.exchange_request_by_friend(FRIEND_ID, exchange_type=1)["__cli_error_code__"] == "ACTION_UNCONFIRMED"
+		client, _ = _client(
+			page=_page("ExchangePhone"), histories=[_history(OLD_MESSAGE), _history(OLD_MESSAGE, _card(101, aid))]
+		)
+		assert (
+			client.exchange_request_by_friend(FRIEND_ID, exchange_type=1)["__cli_error_code__"] == "ACTION_UNCONFIRMED"
+		)
 		client.close()
 
 
-def test_action_card_json_in_ws_frame_counts_as_evidence():
+def test_action_card_json_in_ws_frame_is_attempt_only():
 	frame = '{"action":{"extend":"{}","aid":32},"type":4,"templateId":1}'
 	client, _ = _client(page=_page("ExchangeWx", "not_required"), events=[_ws(frame)])
 	result = client.exchange_request_by_friend(FRIEND_ID, exchange_type=2)
-	assert result["code"] == 0
-	assert result["zpData"]["matched_ws_count"] == 1
+	assert result["__cli_error_code__"] == "ACTION_UNCONFIRMED"
+	assert result["zpData"]["ws_evidence"]["ws_send_count"] == 1
 	client.close()
 
 	client, _ = _client(page=_page("ExchangeWx", "not_required"), events=[_ws(frame.replace("32", "37"))])

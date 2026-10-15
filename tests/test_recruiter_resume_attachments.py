@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from boss_agent_cli.api import recruiter_endpoints as ep
+from boss_agent_cli.api.client import AccountRiskError, EnvironmentRiskError, PlatformRiskError
 from boss_agent_cli.api.recruiter_client import BossRecruiterClient, RecruiterAuthError
 from boss_agent_cli.api.recruiter_resume import ResumeValidationError, attachment_params, save_resume
 from boss_agent_cli.auth.manager import AuthRequired
@@ -316,6 +317,12 @@ def test_accept_native_transport_does_not_retry_or_refresh(status, body):
 		client._request = BossRecruiterClient._request.__get__(client)
 		try:
 			client.accept_resume_by_friend(123, 456)
+		except PlatformRiskError as exc:
+			if status == 403:
+				assert isinstance(exc, AccountRiskError)
+			else:
+				assert json.loads(body)["code"] == 37 and "stoken" not in body
+				assert isinstance(exc, EnvironmentRiskError)
 		except (httpx.HTTPError, RecruiterAuthError) as exc:
 			assert status in (403, 302), type(exc)
 	assert len(requests) == 1

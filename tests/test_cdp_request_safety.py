@@ -313,13 +313,20 @@ def test_locked_same_stoken_refuses_without_sending(tmp_path, no_httpx):
 	assert (tmp_path / cdp_risk_lock.LOCK_FILENAME).exists()
 
 
-def test_locked_changed_stoken_proceeds_and_clears(tmp_path, no_httpx):
+def test_changed_stoken_keeps_lock_until_explicit_cleanup(tmp_path, no_httpx):
 	cdp_risk_lock.write_lock(tmp_path, cdp_risk_lock.hash_stoken(RAW_STOKEN))
 	browser = FakeBrowser(stoken=NEW_STOKEN)
 	client = _client(tmp_path, browser)
+	with pytest.raises(EnvironmentRiskLockedError):
+		client.job_card("sec")
+	assert browser.calls == []
+	assert browser.started == 0
+	assert (tmp_path / cdp_risk_lock.LOCK_FILENAME).exists()
+	result = CliRunner().invoke(cli, ["--data-dir", str(tmp_path), "--json", "clean", "--risk-lock"])
+	assert result.exit_code == 0
+	assert json.loads(result.output)["data"]["risk_lock"]["platform_risk_status"] == "unverified"
 	assert client.job_card("sec")["code"] == 0
 	assert len(browser.calls) == 1
-	assert not (tmp_path / cdp_risk_lock.LOCK_FILENAME).exists()
 
 
 def test_lock_unreadable_stoken_fails_closed(tmp_path, no_httpx):
@@ -341,16 +348,18 @@ def test_corrupt_lock_fails_closed(tmp_path, no_httpx):
 	assert browser.calls == []
 
 
-def test_lock_does_not_apply_to_headless_session(tmp_path):
+def test_recorded_lock_also_blocks_headless_session(tmp_path):
 	cdp_risk_lock.write_lock(tmp_path, cdp_risk_lock.hash_stoken(RAW_STOKEN))
 	browser = FakeBrowser(is_cdp=False)
 	client = _client(tmp_path, browser, cdp_url=None)
-	client.search_jobs("Python")
-	assert len(browser.calls) == 1
+	with pytest.raises(EnvironmentRiskLockedError):
+		client.search_jobs("Python")
+	assert browser.calls == []
+	assert browser.started == 0
 	assert (tmp_path / cdp_risk_lock.LOCK_FILENAME).exists()
 
 
-def test_absent_stoken_lock_unlocks_when_stoken_appears(tmp_path, no_httpx):
+def test_absent_stoken_lock_stays_locked_when_stoken_appears(tmp_path, no_httpx):
 	browser = FakeBrowser(stoken=None, responses=[ENV_RISK])
 	client = _client(tmp_path, browser)
 	with pytest.raises(EnvironmentRiskError):
@@ -361,8 +370,9 @@ def test_absent_stoken_lock_unlocks_when_stoken_appears(tmp_path, no_httpx):
 	with pytest.raises(EnvironmentRiskLockedError):
 		_client(tmp_path, same).search_jobs("Python")
 	fresh = FakeBrowser(stoken=NEW_STOKEN)
-	_client(tmp_path, fresh).search_jobs("Python")
-	assert len(fresh.calls) == 1
+	with pytest.raises(EnvironmentRiskLockedError):
+		_client(tmp_path, fresh).search_jobs("Python")
+	assert fresh.calls == []
 
 
 def test_token_expired_code37_does_not_lock(tmp_path, no_httpx):
@@ -375,8 +385,8 @@ def test_recruiter_code37_records_and_respects_lock(tmp_path, no_httpx):
 	client = BossRecruiterClient(FakeAuth(tmp_path), cdp_url="http://127.0.0.1:9222")
 	browser = FakeBrowser(responses=[ENV_RISK])
 	client._browser_session = browser  # type: ignore[assignment]
-	result = client.friend_labels()
-	assert result["code"] == 37
+	with pytest.raises(EnvironmentRiskError):
+		client.friend_labels()
 	assert (tmp_path / cdp_risk_lock.LOCK_FILENAME).exists()
 	with pytest.raises(EnvironmentRiskLockedError):
 		client.friend_labels()

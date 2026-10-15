@@ -140,4 +140,6 @@ def test_agent_crawl_does_not_process_risk_stopped_runs(tmp_path: Path, monkeypa
 	assert result.exit_code == 1
 	payload = json.loads(result.output)
 	assert payload["error"]["code"] == "CRAWL_NOT_COMPLETED"
-	assert payload["error"]["recovery_action"] == "boss crawl resume run-1"
+	assert "boss clean --risk-lock" in payload["error"]["recovery_action"]
+	assert not payload["hints"].get("next_actions")
+	assert any("boss crawl resume run-1" in item for item in payload["hints"]["operator_actions"])

@@ -58,9 +58,14 @@ class TestBossEnvelopeAdapter:
 		assert self.plat.unwrap_data({"code": 0}) is None
 
 	def test_parse_error_stoken_expired(self) -> None:
-		code, msg = self.plat.parse_error({"code": 37, "message": "stoken invalid"})
+		code, msg = self.plat.parse_error({"code": 37, "message": "stoken expired"})
 		assert code == "TOKEN_REFRESH_FAILED"
-		assert "stoken" in msg.lower() or msg
+		assert msg == "stoken expired"
+
+	def test_parse_error_stoken_invalid_is_environment_risk(self) -> None:
+		code, msg = self.plat.parse_error({"code": 37, "message": "stoken invalid"})
+		assert code == "ENVIRONMENT_RISK"
+		assert msg == "stoken invalid"
 
 	def test_parse_error_environment_risk_code_37(self) -> None:
 		"""环境异常文案的 code 37 必须归为 ENVIRONMENT_RISK，不得转回 TOKEN_REFRESH_FAILED。"""

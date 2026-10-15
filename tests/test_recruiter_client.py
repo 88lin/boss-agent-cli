@@ -1,4 +1,5 @@
 """BossRecruiterClient unit tests — mock httpx + browser channels."""
+
 import json
 from unittest.mock import MagicMock, patch
 
@@ -34,7 +35,8 @@ def test_greet_list_calls_get():
 	with patch.object(client, "_request", return_value=mock_result) as mock_req:
 		result = client.greet_list(page=1, job_id="abc")
 		mock_req.assert_called_once_with(
-			"GET", ep.BOSS_GREET_LIST_URL,
+			"GET",
+			ep.BOSS_GREET_LIST_URL,
 			params={"page": 1, "encJobId": "abc"},
 		)
 		assert result == mock_result
@@ -48,7 +50,8 @@ def test_search_geeks_calls_get():
 	with patch.object(client, "_request", return_value=mock_result) as mock_req:
 		result = client.search_geeks("Python", city="101010100", page=2)
 		mock_req.assert_called_once_with(
-			"GET", ep.BOSS_SEARCH_GEEK_URL,
+			"GET",
+			ep.BOSS_SEARCH_GEEK_URL,
 			params={
 				"page": 2,
 				"keywords": "Python",
@@ -131,7 +134,8 @@ def test_view_geek_calls_get():
 	with patch.object(client, "_request", return_value=mock_result) as mock_req:
 		result = client.view_geek("g1", "j1", security_id="s1")
 		mock_req.assert_called_once_with(
-			"GET", ep.BOSS_VIEW_GEEK_URL,
+			"GET",
+			ep.BOSS_VIEW_GEEK_URL,
 			params={"encryptGeekId": "g1", "encryptJobId": "j1", "securityId": "s1"},
 		)
 		assert result == mock_result
@@ -145,7 +149,8 @@ def test_send_message_calls_browser():
 	with patch.object(client, "_browser_request", return_value=mock_result) as mock_br:
 		result = client.send_message(12345, "你好")
 		mock_br.assert_called_once_with(
-			"POST", ep.BOSS_SEND_MESSAGE_URL,
+			"POST",
+			ep.BOSS_SEND_MESSAGE_URL,
 			data={"gid": 12345, "content": "你好"},
 		)
 		assert result == mock_result
@@ -158,14 +163,23 @@ def test_send_message_by_friend_happy_path():
 	client = BossRecruiterClient(auth)
 	friend_detail_resp = {
 		"code": 0,
-		"zpData": {"friendList": [{
-			"uid": 12345, "encryptUid": "enc-u",
-			"encryptJobId": "enc-j", "securityId": "sec-s",
-			"friendSource": 0, "name": "Tester",
-		}]},
+		"zpData": {
+			"friendList": [
+				{
+					"uid": 12345,
+					"encryptUid": "enc-u",
+					"encryptJobId": "enc-j",
+					"securityId": "sec-s",
+					"friendSource": 0,
+					"name": "Tester",
+				}
+			]
+		},
 	}
-	with patch.object(client, "_request", return_value=friend_detail_resp), \
-		patch.object(client, "_get_browser") as mock_get_browser:
+	with (
+		patch.object(client, "_request", return_value=friend_detail_resp),
+		patch.object(client, "_get_browser") as mock_get_browser,
+	):
 		mock_browser = MagicMock()
 		mock_browser.evaluate_js_with_chat_events.return_value = {
 			"value": {"ok": True, "log": ["geekClick called", "sendText returned undefined"]},
@@ -173,6 +187,17 @@ def test_send_message_by_friend_happy_path():
 		}
 		mock_get_browser.return_value = mock_browser
 
+		client.chat_history = MagicMock(
+			side_effect=[
+				{"code": 0, "zpData": {"messages": []}},
+				{
+					"code": 0,
+					"zpData": {
+						"messages": [{"mid": 7, "from": {"uid": 9}, "to": {"uid": 12345}, "body": {"text": "你好"}}]
+					},
+				},
+			]
+		)
 		result = client.send_message_by_friend(12345, "你好")
 		assert result["code"] == 0
 		assert "events" not in result["zpData"]
@@ -204,7 +229,15 @@ def test_exchange_request_by_friend_uses_frontend_component():
 	"""exchange_request_by_friend 走 geekClick + ExchangePhone/Resume.handleExChange 前端链路。"""
 	auth = _make_auth()
 	client = BossRecruiterClient(auth)
-	friend = {"uid": 1, "encryptUid": "u", "encryptJobId": "j", "encryptExpectId": None, "securityId": "sec-old", "name": "Tester", "friendSource": 0}
+	friend = {
+		"uid": 1,
+		"encryptUid": "u",
+		"encryptJobId": "j",
+		"encryptExpectId": None,
+		"securityId": "sec-old",
+		"name": "Tester",
+		"friendSource": 0,
+	}
 	friend_detail_resp = {"code": 0, "zpData": {"friendList": [friend]}}
 	page_response = {
 		"ok": True,
@@ -212,8 +245,10 @@ def test_exchange_request_by_friend_uses_frontend_component():
 		"confirmed": True,
 		"log": ["geekClick called", "found ExchangePhone type=1", "handleExChange returned"],
 	}
-	with patch.object(client, "_request", return_value=friend_detail_resp), \
-		patch.object(client, "_get_browser") as mock_get_browser:
+	with (
+		patch.object(client, "_request", return_value=friend_detail_resp),
+		patch.object(client, "_get_browser") as mock_get_browser,
+	):
 		mock_browser = MagicMock()
 		mock_browser.evaluate_js_with_chat_events.return_value = {
 			"value": page_response,
@@ -221,6 +256,19 @@ def test_exchange_request_by_friend_uses_frontend_component():
 		}
 		mock_get_browser.return_value = mock_browser
 
+		client.chat_history = MagicMock(
+			side_effect=[
+				{"code": 0, "zpData": {"messages": []}},
+				{
+					"code": 0,
+					"zpData": {
+						"messages": [
+							{"mid": 7, "from": {"uid": 9}, "to": {"uid": 1}, "body": {"text": "请求交换联系方式"}}
+						]
+					},
+				},
+			]
+		)
 		result = client.exchange_request_by_friend(1, exchange_type=1)
 		assert result["code"] == 0
 		assert result["zpData"]["friendId"] == 1
@@ -240,10 +288,23 @@ def test_exchange_request_by_friend_maps_wechat_to_exchangewx():
 	client = BossRecruiterClient(auth)
 	friend_detail_resp = {
 		"code": 0,
-		"zpData": {"friendList": [{"uid": 1, "encryptUid": "u", "encryptJobId": "j", "securityId": "s", "name": "Tester", "friendSource": 0}]},
+		"zpData": {
+			"friendList": [
+				{
+					"uid": 1,
+					"encryptUid": "u",
+					"encryptJobId": "j",
+					"securityId": "s",
+					"name": "Tester",
+					"friendSource": 0,
+				}
+			]
+		},
 	}
-	with patch.object(client, "_request", return_value=friend_detail_resp), \
-		patch.object(client, "_get_browser") as mock_get_browser:
+	with (
+		patch.object(client, "_request", return_value=friend_detail_resp),
+		patch.object(client, "_get_browser") as mock_get_browser,
+	):
 		mock_browser = MagicMock()
 		mock_browser.evaluate_js_with_chat_events.return_value = {
 			"value": {"ok": True, "componentName": "ExchangeWx", "confirmed": True, "log": []},
@@ -251,6 +312,19 @@ def test_exchange_request_by_friend_maps_wechat_to_exchangewx():
 		}
 		mock_get_browser.return_value = mock_browser
 
+		client.chat_history = MagicMock(
+			side_effect=[
+				{"code": 0, "zpData": {"messages": []}},
+				{
+					"code": 0,
+					"zpData": {
+						"messages": [
+							{"mid": 7, "from": {"uid": 9}, "to": {"uid": 1}, "body": {"text": "请求交换联系方式"}}
+						]
+					},
+				},
+			]
+		)
 		result = client.exchange_request_by_friend(1, exchange_type=2)
 		assert result["code"] == 0
 		js_arg = mock_browser.evaluate_js_with_chat_events.call_args[0][1]
@@ -262,9 +336,25 @@ def test_exchange_request_by_friend_page_error_propagated():
 	"""页面侧 Exchange 组件失败时，错误信息进入 CLI 信封。"""
 	auth = _make_auth()
 	client = BossRecruiterClient(auth)
-	friend_detail_resp = {"code": 0, "zpData": {"friendList": [{"uid": 1, "encryptUid": "u", "encryptJobId": "j", "securityId": "s", "name": "Tester", "friendSource": 0}]}}
-	with patch.object(client, "_request", return_value=friend_detail_resp), \
-		patch.object(client, "_get_browser") as mock_get_browser:
+	friend_detail_resp = {
+		"code": 0,
+		"zpData": {
+			"friendList": [
+				{
+					"uid": 1,
+					"encryptUid": "u",
+					"encryptJobId": "j",
+					"securityId": "s",
+					"name": "Tester",
+					"friendSource": 0,
+				}
+			]
+		},
+	}
+	with (
+		patch.object(client, "_request", return_value=friend_detail_resp),
+		patch.object(client, "_get_browser") as mock_get_browser,
+	):
 		mock_browser = MagicMock()
 		mock_browser.evaluate_js_with_chat_events.return_value = {
 			"value": {"ok": False, "error": "ExchangeResume Vue component not found", "log": []},
@@ -288,10 +378,14 @@ def test_send_message_by_friend_page_error_propagated():
 	client = BossRecruiterClient(auth)
 	friend_detail_resp = {
 		"code": 0,
-		"zpData": {"friendList": [{"uid": 1, "encryptUid": "u", "encryptJobId": "j", "securityId": "s", "friendSource": 0}]},
+		"zpData": {
+			"friendList": [{"uid": 1, "encryptUid": "u", "encryptJobId": "j", "securityId": "s", "friendSource": 0}]
+		},
 	}
-	with patch.object(client, "_request", return_value=friend_detail_resp), \
-		patch.object(client, "_get_browser") as mock_get_browser:
+	with (
+		patch.object(client, "_request", return_value=friend_detail_resp),
+		patch.object(client, "_get_browser") as mock_get_browser,
+	):
 		mock_browser = MagicMock()
 		mock_browser.evaluate_js_with_chat_events.return_value = {
 			"value": {"ok": False, "error": "geek-list Vue component not at .chat-user", "log": []},
@@ -313,10 +407,14 @@ def test_send_message_by_friend_without_real_ws_send_returns_error():
 	private_message = "候选人张三问薪资 30K 可否远程"
 	friend_detail_resp = {
 		"code": 0,
-		"zpData": {"friendList": [{"uid": 1, "encryptUid": "u", "encryptJobId": "j", "securityId": "s", "friendSource": 0}]},
+		"zpData": {
+			"friendList": [{"uid": 1, "encryptUid": "u", "encryptJobId": "j", "securityId": "s", "friendSource": 0}]
+		},
 	}
-	with patch.object(client, "_request", return_value=friend_detail_resp), \
-		patch.object(client, "_get_browser") as mock_get_browser:
+	with (
+		patch.object(client, "_request", return_value=friend_detail_resp),
+		patch.object(client, "_get_browser") as mock_get_browser,
+	):
 		mock_browser = MagicMock()
 		mock_browser.evaluate_js_with_chat_events.return_value = {
 			"value": {"ok": True, "log": ["sendText returned undefined"]},
@@ -326,7 +424,7 @@ def test_send_message_by_friend_without_real_ws_send_returns_error():
 
 		result = client.send_message_by_friend(1, "x")
 		assert result["code"] == -1
-		assert "no confirmed chat websocket send detected" in result["message"]
+		assert "does not confirm acceptance in target chat history" in result["message"]
 		assert result["zpData"]["ws_evidence"]["matched_ws_count"] == 0
 		assert "sample_bits" not in result["zpData"]["ws_evidence"]
 		assert private_message not in json.dumps(result, ensure_ascii=False)
@@ -339,14 +437,23 @@ def test_exchange_request_by_friend_without_real_ws_send_returns_error():
 	client = BossRecruiterClient(auth)
 	friend_detail_resp = {
 		"code": 0,
-		"zpData": {"friendList": [{"uid": 1, "encryptUid": "u", "encryptJobId": "j", "securityId": "s", "friendSource": 0}]},
+		"zpData": {
+			"friendList": [{"uid": 1, "encryptUid": "u", "encryptJobId": "j", "securityId": "s", "friendSource": 0}]
+		},
 	}
-	with patch.object(client, "_request", return_value=friend_detail_resp), \
-		patch.object(client, "_get_browser") as mock_get_browser, \
-		patch("boss_agent_cli.api.recruiter_client.time.sleep"):
+	with (
+		patch.object(client, "_request", return_value=friend_detail_resp),
+		patch.object(client, "_get_browser") as mock_get_browser,
+		patch("boss_agent_cli.api.recruiter_client.time.sleep"),
+	):
 		mock_browser = MagicMock()
 		mock_browser.evaluate_js_with_chat_events.return_value = {
-			"value": {"ok": True, "componentName": "ExchangeResume", "confirmed": True, "log": ["handleExChange returned"]},
+			"value": {
+				"ok": True,
+				"componentName": "ExchangeResume",
+				"confirmed": True,
+				"log": ["handleExChange returned"],
+			},
 			"events": [{"kind": "ws_send", "bytes": 156, "utf8_bits": ["/message/suggest", "query"]}],
 		}
 		mock_get_browser.return_value = mock_browser
@@ -378,7 +485,8 @@ def test_job_offline_calls_browser():
 	with patch.object(client, "_browser_request", return_value=mock_result) as mock_br:
 		result = client.job_offline("enc123")
 		mock_br.assert_called_once_with(
-			"POST", ep.BOSS_JOB_OFFLINE_URL,
+			"POST",
+			ep.BOSS_JOB_OFFLINE_URL,
 			data={"encryptJobId": "enc123"},
 		)
 		assert result == mock_result

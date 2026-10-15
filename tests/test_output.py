@@ -75,6 +75,88 @@ def test_redaction_preserves_public_private_fields_metadata():
 	assert parsed["data"]["private_token"] == "[REDACTED]"
 
 
+def test_schema_parameters_preserve_metadata_and_redact_payload_values():
+	from boss_agent_cli.schema.formats import schema_parameter_paths
+
+	data = {
+		"format": "mcp-tools",
+		"tools": [{
+			"name": "boss_schema_fixture",
+			"inputSchema": {
+				"type": "object",
+				"properties": {
+					"include_private": {"type": "boolean", "description": "保留字段", "default": False},
+					"access_token": {
+						"type": "string", "description": "参数说明 cookie=test-cookie",
+						"default": "test-default-token", "examples": ["test-example-token"],
+					},
+					"inputs": {
+						"type": "object",
+						"properties": {"session_id": {"type": "string", "description": "会话参数", "default": "test-session"}},
+						"default": {"private_token": "test-nested-default", "type": "object"},
+						"examples": [{"credentials": {"type": "object", "properties": {"token": "test-nested-example"}}}],
+					},
+					"cookies": {"type": "array", "items": {"type": "string", "default": "test-array-cookie", "examples": ["test-array-example"]}},
+				},
+			},
+		}],
+		"business": {"private_token": {"type": "object", "properties": {"token": "test-business-token"}}},
+	}
+	paths = schema_parameter_paths(data)
+	assert ("tools", 0, "inputSchema", "properties", "inputs", "default", "private_token") not in paths
+	parsed = json.loads(envelope_success("schema", data, schema_parameter_paths=paths))
+	properties = parsed["data"]["tools"][0]["inputSchema"]["properties"]
+	assert properties["include_private"] == data["tools"][0]["inputSchema"]["properties"]["include_private"]
+	assert properties["access_token"]["type"] == "string"
+	assert properties["access_token"]["description"] == "参数说明 cookie=[REDACTED]"
+	assert properties["access_token"]["default"] == "[REDACTED]"
+	assert properties["access_token"]["examples"] == "[REDACTED]"
+	assert properties["inputs"]["properties"]["session_id"]["default"] == "[REDACTED]"
+	assert properties["inputs"]["default"]["private_token"] == "[REDACTED]"
+	assert properties["inputs"]["examples"][0]["credentials"] == "[REDACTED]"
+	assert properties["cookies"]["items"]["type"] == "string"
+	assert properties["cookies"]["items"]["default"] == "[REDACTED]"
+	assert properties["cookies"]["items"]["examples"] == "[REDACTED]"
+	assert parsed["data"]["business"]["private_token"] == "[REDACTED]"
+	assert "test-default-token" not in json.dumps(parsed)
+	assert "test-business-token" not in json.dumps(parsed)
+	# 深拷贝脱敏不能改写源目录，否则下一次导出或 MCP 服务会跟着变化。
+	assert data["tools"][0]["inputSchema"]["properties"]["access_token"]["default"] == "test-default-token"
+
+
+def test_schema_parameter_paths_are_ignored_for_business_commands():
+	data = {"private_token": {"type": "object", "description": "业务字典"}}
+	parsed = json.loads(envelope_success("search", data, schema_parameter_paths={("private_token",): "private_token"}))
+	assert parsed["data"]["private_token"] == "[REDACTED]"
+
+
+def test_schema_shape_alone_cannot_bypass_redaction():
+	data = {"private_token": {"type": "object", "properties": {"token": "test-token"}}}
+	parsed = json.loads(envelope_success("schema", data))
+	assert parsed["data"]["private_token"] == "[REDACTED]"
+
+
+def test_native_schema_parameter_metadata_remains_visible_with_private_defaults_redacted():
+	from boss_agent_cli.schema.formats import schema_parameter_paths
+
+	data = {
+		"commands": {"fixture": {
+			"args": [{"name": "session_id", "description": "会话参数", "default": "test-session"}],
+			"options": {"group": {"--include-private": {"type": "bool", "default": False, "description": "保留字段"},
+				"--api-key": {"type": "string", "default": "test-api-key", "description": "参数说明"}}},
+		}},
+		"global_options": {},
+		"credentials": {"type": "object", "properties": {"token": "test-business"}},
+	}
+	parsed = json.loads(envelope_success("schema", data, schema_parameter_paths=schema_parameter_paths(data)))
+	command = parsed["data"]["commands"]["fixture"]
+	assert command["options"]["group"]["--include-private"]["default"] is False
+	assert command["options"]["group"]["--api-key"]["type"] == "string"
+	assert command["options"]["group"]["--api-key"]["default"] == "[REDACTED]"
+	assert command["args"][0]["default"] == "[REDACTED]"
+	assert parsed["data"]["credentials"] == "[REDACTED]"
+
+
 def test_envelope_error():
 	result = envelope_error(
 		"search",

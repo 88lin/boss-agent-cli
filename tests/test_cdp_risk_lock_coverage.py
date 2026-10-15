@@ -1,4 +1,5 @@
 """CDP code 37 风控锁覆盖到聊天页动作与 login --cdp（全部离线：CDP、浏览器、平台都是替身）。"""
+
 from __future__ import annotations
 
 import base64
@@ -12,7 +13,7 @@ from click.testing import CliRunner
 
 from boss_agent_cli.api import browser_client, cdp_risk_lock
 from boss_agent_cli.api.browser_client import _PageRiskResponseTracker, read_cdp_stoken_hash
-from boss_agent_cli.api.client import EnvironmentRiskError, EnvironmentRiskLockedError
+from boss_agent_cli.api.client import AccountRiskError, EnvironmentRiskError, EnvironmentRiskLockedError
 from boss_agent_cli.api.recruiter_client import BossRecruiterClient
 from boss_agent_cli.auth.manager import AuthManager
 from boss_agent_cli.main import cli
@@ -85,8 +86,16 @@ def test_tracker_keeps_only_risk_codes_and_minimal_fields():
 def test_tracker_ignores_non_wapi_and_non_json():
 	tracker = _PageRiskResponseTracker()
 	assert _feed(tracker, "https://www.zhipin.com/web/chat/index", "{}") is None
-	assert _feed(tracker, "https://www.zhipin.com/wapi/x", "{}", mime="text/html") is None
+	assert _feed(tracker, "https://example.test/wapi/x", "{}", mime="text/html") is None
+	_feed(tracker, "https://www.zhipin.com/wapi/x", "<html><title>工作页面</title></html>", mime="text/html")
 	assert tracker.events == []
+
+
+@pytest.mark.parametrize("code", [35, "35"])
+def test_tracker_keeps_code35_as_minimal_integer_risk_event(code):
+	tracker = _PageRiskResponseTracker()
+	_feed(tracker, "https://www.zhipin.com/wapi/zpchat/x?fixture=sensitive", json.dumps({"code": code}))
+	assert tracker.events == [{"kind": "http_risk", "path": "/wapi/zpchat/x", "code": 35, "message": ""}]
 
 
 def test_read_cdp_stoken_hash_uses_storage_get_cookies_and_fails_closed():
@@ -143,13 +152,27 @@ def test_unreadable_stoken_keeps_chat_page_locked(tmp_path):
 	browser.evaluate_js_with_chat_events.assert_not_called()
 
 
-def test_changed_stoken_unlocks_chat_page_action(tmp_path):
+def test_changed_stoken_does_not_unlock_chat_page_action(tmp_path):
 	_lock(tmp_path)
 	client, browser = _client(tmp_path, events=[{"kind": "ws_send", "bytes": 194, "utf8_bits": ["你好呀"]}])
+	client.chat_history.side_effect = [
+		HISTORY,
+		{
+			"code": 0,
+			"zpData": {
+				"messages": [
+					{"mid": 2, "from": {"uid": 9}, "to": {"uid": 1}, "body": {"text": "你好呀"}},
+				]
+			},
+		},
+	]
 	with patch.object(browser_client, "read_cdp_stoken_hash", return_value=NEW_HASH):
-		assert client.send_message_by_friend(1, "你好呀")["code"] == 0
-	assert not (tmp_path / cdp_risk_lock.LOCK_FILENAME).exists()
-	browser.evaluate_js_with_chat_events.assert_called_once()
+		with pytest.raises(EnvironmentRiskLockedError):
+			client.send_message_by_friend(1, "你好呀")
+	assert (tmp_path / cdp_risk_lock.LOCK_FILENAME).exists()
+	client.friend_detail.assert_not_called()
+	client.chat_history.assert_not_called()
+	browser.evaluate_js_with_chat_events.assert_not_called()
 
 
 def test_page_code37_during_exchange_records_lock_and_maps_to_environment_risk(tmp_path):
@@ -161,23 +184,52 @@ def test_page_code37_during_exchange_records_lock_and_maps_to_environment_risk(t
 	assert result["__cli_error_details__"]["page_risk"] == {"path": "/wapi/zpchat/exchange/test", "code": 37}
 	assert BossRecruiterPlatform(client).parse_error(result)[0] == "ENVIRONMENT_RISK"
 	lock = cdp_risk_lock.read_lock(tmp_path)
-	assert lock is not None and lock.stoken_sha256 == OLD_HASH
-	# 之后同一 stoken 的任何聊天页动作都会被拦下
+	assert lock is not None and lock.stoken_sha256 is None
+	assert lock.reason == "ENVIRONMENT_RISK" and lock.platform_code == 37
+	# 之后任何聊天页动作都被拦下，不追加 CDP Cookie 读取。
 	with patch.object(browser_client, "read_cdp_stoken_hash", return_value=OLD_HASH), pytest.raises(EnvironmentRiskLockedError):
 		client.send_message_by_friend(1, "x")
 
 
-def test_page_code36_maps_to_account_risk_without_lock(tmp_path):
+def test_page_code36_latches_original_account_risk(tmp_path):
 	events = [{"kind": "http_risk", "path": "/wapi/zpchat/x", "code": 36, "message": "账户存在异常行为"}]
 	client, _ = _client(tmp_path, events=events)
 	result = client.send_message_by_friend(1, "你好")
 	assert result["code"] == 36
 	assert BossRecruiterPlatform(client).parse_error(result)[0] == "ACCOUNT_RISK"
-	assert not (tmp_path / cdp_risk_lock.LOCK_FILENAME).exists()
+	lock = cdp_risk_lock.read_lock(tmp_path)
+	assert lock is not None and lock.reason == "ACCOUNT_RISK" and lock.platform_code == 36
+	with pytest.raises(AccountRiskError) as error:
+		client.send_message_by_friend(1, "x")
+	assert error.value.details["risk_lock"]["reason"] == "ACCOUNT_RISK"
+
+
+@pytest.mark.parametrize("code", [35, "35"])
+def test_page_code35_stops_history_polls_and_latches_original_code(tmp_path, code):
+	client, browser = _client(tmp_path, events=[{"kind": "http_risk", "path": "/wapi/zpchat/x", "code": code}])
+	with patch.object(browser_client, "read_cdp_stoken_hash", side_effect=AssertionError("风险后不能追加 CDP 读取")):
+		result = client.send_message_by_friend(1, "fixture")
+	assert result["code"] == 35
+	assert client.chat_history.call_count == 1
+	assert browser.evaluate_js_with_chat_events.call_count == 1
+	lock = cdp_risk_lock.read_lock(tmp_path)
+	assert lock is not None and lock.reason == "ACCOUNT_RISK" and lock.platform_code == 35
+	assert result["__cli_error_details__"]["risk_lock"]["platform_code"] == 35
 
 
 def test_no_lock_means_no_cdp_cookie_read(tmp_path):
 	client, _ = _client(tmp_path, events=[{"kind": "ws_send", "bytes": 194, "utf8_bits": ["你好呀"]}])
+	client.chat_history.side_effect = [
+		HISTORY,
+		{
+			"code": 0,
+			"zpData": {
+				"messages": [
+					{"mid": 2, "from": {"uid": 9}, "to": {"uid": 1}, "body": {"text": "你好呀"}},
+				]
+			},
+		},
+	]
 	with patch.object(browser_client, "read_cdp_stoken_hash", side_effect=AssertionError("不应读取")):
 		assert client.send_message_by_friend(1, "你好呀")["code"] == 0
 
@@ -201,7 +253,7 @@ def test_login_cdp_blocked_while_locked(tmp_path):
 			_auth(tmp_path).login(force_cdp=True)
 	login_via_cdp.assert_not_called()
 	assert "boss clean --risk-lock" in str(exc_info.value)
-	assert "--ignore-risk-lock" in str(exc_info.value)
+	assert exc_info.value.details["risk_lock"]["explicit_resume_required"] is True
 
 
 def test_login_auto_path_blocked_before_cdp_login(tmp_path):
@@ -217,33 +269,36 @@ def test_login_auto_path_blocked_before_cdp_login(tmp_path):
 	qr.assert_not_called()
 
 
-def test_login_cdp_unlocks_when_stoken_changed(tmp_path):
+def test_login_cdp_keeps_lock_when_stoken_changed(tmp_path):
 	_lock(tmp_path)
 	with patch("boss_agent_cli.auth.manager.probe_cdp", return_value="ws://x"), \
 		patch.object(browser_client, "read_cdp_stoken_hash", return_value=NEW_HASH), \
 		patch("boss_agent_cli.auth.manager.login_via_cdp", return_value=dict(TOKEN)):
-		_auth(tmp_path).login(force_cdp=True)
-	assert not (tmp_path / cdp_risk_lock.LOCK_FILENAME).exists()
+		with pytest.raises(EnvironmentRiskLockedError):
+			_auth(tmp_path).login(force_cdp=True)
+	assert (tmp_path / cdp_risk_lock.LOCK_FILENAME).exists()
 
 
-def test_login_cdp_ignore_flag_proceeds_and_keeps_lock(tmp_path):
+def test_login_cdp_ignore_flag_cannot_bypass_lock(tmp_path):
 	_lock(tmp_path)
 	with patch("boss_agent_cli.auth.manager.probe_cdp", return_value="ws://x"), \
 		patch.object(browser_client, "read_cdp_stoken_hash", side_effect=AssertionError("不应读取")), \
 		patch("boss_agent_cli.auth.manager.login_via_cdp", return_value=dict(TOKEN)) as login_via_cdp:
-		_auth(tmp_path).login(force_cdp=True, ignore_risk_lock=True)
-	login_via_cdp.assert_called_once()
+		with pytest.raises(EnvironmentRiskLockedError):
+			_auth(tmp_path).login(force_cdp=True, ignore_risk_lock=True)
+	login_via_cdp.assert_not_called()
 	assert (tmp_path / cdp_risk_lock.LOCK_FILENAME).exists()
 
 
 def test_login_probe_code37_records_lock(tmp_path):
 	with patch("boss_agent_cli.auth.manager.probe_cdp", return_value="ws://x"), \
 		patch.object(browser_client, "read_cdp_stoken_hash", return_value=OLD_HASH), \
-		patch("boss_agent_cli.auth.manager.login_via_cdp", side_effect=EnvironmentRiskError("code 37", is_cdp=True)):
+		patch("boss_agent_cli.auth.manager.login_via_cdp", side_effect=EnvironmentRiskError("code 37", is_cdp=True, details={"platform_code": 37})):
 		with pytest.raises(EnvironmentRiskError):
 			_auth(tmp_path).login(force_cdp=True)
 	lock = cdp_risk_lock.read_lock(tmp_path)
-	assert lock is not None and lock.stoken_sha256 == OLD_HASH
+	assert lock is not None and lock.stoken_sha256 is None
+	assert lock.reason == "ENVIRONMENT_RISK" and lock.platform_code == 37
 
 
 def test_login_cli_envelope_while_locked(tmp_path):

@@ -7,7 +7,7 @@
 
 所以这里不查装饰器语法，直接问运行时注册表：`server.request_handlers` 里有没有它。
 
-两条测试都刻意在**子进程**里跑。`tests/test_mcp_server.py` 会在导入时
+测试都刻意在**子进程**里跑。`tests/test_mcp_server.py` 会在导入时
 `sys.modules.setdefault("mcp", <mock 模块>)`，而 pytest 单进程收集全部测试模块——
 一旦本文件拿到那个 mock，`request_handlers` 就是个 MagicMock，任何断言都恒真，
 守卫会变成装饰用的。子进程保证拿到真实 SDK。
@@ -54,13 +54,14 @@ print(json.dumps({
 }))
 """
 
-# 协议层实际发出的工具集合，必须与 mcp_tools.TOOLS 逐名相等。用集合相等而不是数量
-# 断言：既抓「工具漏发」，也抓「协议层发出了目录外的工具」，且不引入 73 这个硬编码
-# 数字——CLAUDE.md 要求计数只有一个真源。
+# 协议层与实际 CLI 的工具导出必须与 mcp_tools.TOOLS 逐名、逐参数相等。
+# 不硬编码工具数量，且真实进程隔离 pytest 收集期的 SDK mock。
 _CATALOG_PROBE = """
 import asyncio
 import json
+import subprocess
 import sys
+import tempfile
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -74,9 +75,40 @@ async def main():
 		async with ClientSession(read_stream, write_stream) as session:
 			await session.initialize()
 			listed = await session.list_tools()
+	exports = {}
+	with tempfile.TemporaryDirectory(prefix="boss-schema-parity-") as data_dir:
+		for output_format in ("openai-tools", "anthropic-tools", "mcp-tools"):
+			result = subprocess.run(
+				[sys.executable, "-c", "from boss_agent_cli.main import cli; cli()", "--data-dir", data_dir, "schema", "--format", output_format],
+				capture_output=True, text=True, encoding="utf-8", timeout=30,
+			)
+			assert result.returncode == 0, result.stderr
+			payload = json.loads(result.stdout)
+			assert set(payload) == {"ok", "schema_version", "command", "data", "pagination", "error", "hints"}
+			assert payload["ok"] is True and payload["command"] == "schema"
+			tools = payload["data"]["tools"]
+			if output_format == "openai-tools":
+				tools = [tool["function"] for tool in tools]
+			schema_key = {"openai-tools": "parameters", "anthropic-tools": "input_schema", "mcp-tools": "inputSchema"}[output_format]
+			exports[output_format] = {
+				"names": sorted(tool["name"] for tool in tools),
+				"definitions": {
+					tool["name"]: {"description": tool["description"], "inputSchema": tool[schema_key]}
+					for tool in tools
+				},
+			}
 	print(json.dumps({
 		"over_protocol": sorted(tool.name for tool in listed.tools),
 		"in_catalog": sorted(tool.name for tool in TOOLS),
+		"protocol_definitions": {
+			tool.name: {"description": tool.description, "inputSchema": tool.input_schema}
+			for tool in listed.tools
+		},
+		"catalog_definitions": {
+			tool.name: {"description": tool.description, "inputSchema": tool.input_schema}
+			for tool in TOOLS
+		},
+		"exports": exports,
 	}))
 
 
@@ -115,7 +147,7 @@ def test_every_declared_mcp_handler_is_registered() -> None:
 	)
 
 
-def test_tools_over_protocol_match_the_catalog() -> None:
+def test_tools_over_protocol_and_cli_exports_match_the_catalog() -> None:
 	report = _run_probe(_CATALOG_PROBE)
 
 	assert report["in_catalog"], "工具目录为空：探针坏了"
@@ -124,3 +156,7 @@ def test_tools_over_protocol_match_the_catalog() -> None:
 		f"只在协议层：{sorted(set(report['over_protocol']) - set(report['in_catalog']))}；"
 		f"只在目录里：{sorted(set(report['in_catalog']) - set(report['over_protocol']))}"
 	)
+	assert report["protocol_definitions"] == report["catalog_definitions"]
+	for output_format, exported in report["exports"].items():
+		assert exported["names"] == report["in_catalog"], f"{output_format} 导出的工具集合与运行时不一致"
+		assert exported["definitions"] == report["catalog_definitions"], f"{output_format} 的描述或参数与运行时不一致"

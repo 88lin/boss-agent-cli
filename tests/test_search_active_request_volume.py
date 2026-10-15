@@ -249,7 +249,9 @@ def test_active_3d_stops_paging_once_default_target_reached():
 	)
 	assert client.list_calls == 1
 	assert result.stats.pages_scanned == 1
-	assert len(result.items) == 13
+	assert len(result.items) == 12
+	assert client.detail_calls == []
+	assert result.stats.detail_checks == result.stats.detail_requests == 0
 
 
 def test_active_3d_stops_paging_once_limit_reached():

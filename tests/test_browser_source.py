@@ -396,13 +396,16 @@ def test_auto_keeps_cdp_request_failure_as_network_error_input():
 	session._started = True
 	session._is_cdp = True
 	session._page = MagicMock()
-	session._page.evaluate.side_effect = RuntimeError("cdp fetch failed")
+	session._context = MagicMock()
+	cdp = session._context.new_cdp_session.return_value
+	cdp.send.side_effect = RuntimeError("cdp fetch failed")
 	session._throttle.wait = MagicMock()
 
 	with pytest.raises(RuntimeError, match="cdp fetch failed"):
-		session.request("GET", "https://www.zhipin.com/wapi/zpgeek/friend/getGeekFriendList.json")
+		session.request("GET", "https://www.zhipin.com/wapi/zprelation/friend/getGeekFriendList.json")
 
-	session._page.evaluate.assert_called_once()
+	cdp.send.assert_called_once()
+	cdp.detach.assert_called_once()
 	session._page.wait_for_load_state.assert_not_called()
 
 
