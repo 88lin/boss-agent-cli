@@ -23,9 +23,6 @@
 - 文档对齐：`CLAUDE.md` 与 `docs/maintainer/branch-protection.md` 同步 2026-10-09 已恢复的 PR CI（lint + Python 3.10 / 3.12 / 3.14 测试矩阵；required status checks 仍未配置）；`pyproject.toml` 注释改指本地 `scripts/verify_release.py --fresh-install`；中英文 README 与 `CLAUDE.md` 的测试计数更新为 2900+。
 
 ### Fixed
-- 招聘者在线简历接口 `/wapi/zpjob/view/geek/info` 返回「旧简历接口已下线」时，`hr resume` 与 wizard 改为 `ENDPOINT_DEPRECATED`（不可恢复，停止重试），并在 `error.details.tracking_issue` 指向 #472。聊天发送旧端点 #217 仍走同一错误码，跟踪链接改到各自的 `details`，不再写死在 `recovery_action`。
-- CDP 回读在线简历时，已解开的 `resumeInfo` 在弹层内部的 `new-chat-resume` 上，外层 `transition` 的 `$children` 为空。读取改为同时扫描弹层里的 Vue 实例；`geekBaseInfo` 只保留解析器会用到的字段。官方请求仍返回下线文案时，才能从页面拿到简历正文。教育经历同时认 `degreeName` / `startDateDesc` / `endDateDesc`。
-- `hr resume` 的在线简历请求改为当前官方沟通页简历面板的参数：`uid`（传入的 encryptGeekId）、`encryptJid`（传入的 encryptJobId）、`securityId`，并带 `X-Requested-With: XMLHttpRequest`。不再发送插件时期的 `encryptGeekId` / `encryptJobId` 参数名，也不生成 `sigx` 或指纹。登录态沟通页打开在线简历时，完整正文来自页面自己的 `GET /wapi/zpjob/view/geek/info/v2`（含 wasm 的 `challenge`）；CLI 不复刻该请求。CDP 下若旧接口仍返回「旧简历接口已下线」，且已打开 `/web/chat/index`，再调用页面自己的 `iBossRoot.resume.newChatResumeViewer`，只读取 securityId 匹配的 `resumeInfo` 白名单字段，并关闭该弹层。页面没有聊天页或没有可读正文时，仍返回原来的下线响应，错误码维持 `ENDPOINT_DEPRECATED`。
 - 修正节流完成时间覆盖后续预约、高斯采样突破间隔下限及 crawl 分类别预算边界；使用单调时钟保持预约，crawl 首页种子导航、分页、页面 fetch 和 CDP fallback 分别申请预算。等待及发送前检查停止、风险和截止时间，停止信号不触发重试或通道降级；写后确认受阻保留 `ACTION_UNCONFIRMED` 和 `confirmation_stop`，失败下载仍记节流，429 下载不读正文或创建文件。crawl 在中断或清理失败前保存进度，清理异常保留原风险或预算停止状态。
 - 校验 `--delay`、延迟范围和共享预算配置的有限数值、正整数及绝对路径约束；非法配置不落盘，保留配置修复入口。预算组有效风险状态进入 `status` / `doctor`，显式清风险锁保留预算及冷却，风险写盘失败仍阻断当前实例。
 - 浏览器风险识别续查：聊天页 `/wapi/` 的 HTTP 403 在响应头事件立即停止，不等正文；错误/缺失 Content-Type 的受限 HTML 仍生成脱敏分类元数据。业务 JSON 先解析原码，避免成功响应中的 HTML 说明触发误锁；纯文本业务响应同样检查风险，外站和普通静态资源不误锁。
@@ -50,6 +47,13 @@
 - 定向更新安全依赖：`[mcp]` 的 PyJWT 锁定到 2.15.1、`[crawl]` 的 urllib3 锁定到 2.8.0、`[dev]` 的 virtualenv 锁定到 21.7.13，并仅连带更新 python-discovery 到 1.6.1。在对应 extra 中声明安全版本下界，避免全新安装回退到已知风险版本，不扩大基础运行依赖；补齐依赖作用域和 JWT 调用者选项隔离/过期声明校验回归。
 - `boss config set platform` 在写入前按当前注册表拒绝已移除、未知或空平台值；失败不创建配置文件，也不改写已有内容，保留显式 `--platform zhipin` 修复旧配置的入口。
 - `boss doctor` 将可执行后继命令与真人操作指引分别放入 `next_actions` / `operator_actions`，命令保留数据目录、平台、浏览器来源和 CDP 上下文；TTY 显示真人指引。源码质量工具检查和维护脚本建议仅面向本项目源码运行，安装包用户不再被要求拥有开发工具链。
+
+## [3.0.1] - 2026-10-23
+
+### Fixed
+- 招聘者在线简历接口 `/wapi/zpjob/view/geek/info` 返回「旧简历接口已下线」时，`hr resume` 与 wizard 改为 `ENDPOINT_DEPRECATED`（不可恢复，停止重试），并在 `error.details.tracking_issue` 指向 #472。聊天发送旧端点 #217 仍走同一错误码，跟踪链接改到各自的 `details`，不再写死在 `recovery_action`。`recovery_action` 文案改为查看 `error.details.tracking_issue`，错误码本身不变。
+- CDP 回读在线简历时，已解开的 `resumeInfo` 在弹层内部的 `new-chat-resume` 上，外层 `transition` 的 `$children` 为空。读取改为同时扫描弹层里的 Vue 实例；`geekBaseInfo` 只保留解析器会用到的字段。教育经历同时认 `degreeName` / `startDateDesc` / `endDateDesc`。
+- `hr resume` 的在线简历请求改为 `uid`、`encryptJid`、`securityId`，并带 `X-Requested-With: XMLHttpRequest`。不再发送插件时期的参数名，也不生成 `sigx`。登录态沟通页的完整正文由页面自己请求 `GET /wapi/zpjob/view/geek/info/v2`（含 wasm 的 `challenge`）；CLI 不复刻该请求。CDP 下若旧接口仍返回下线文案，且已打开 `/web/chat/index`，再调用页面自己的 `newChatResumeViewer`，只读取 securityId 匹配的白名单字段并关闭弹层。没有聊天页或没有可读正文时，仍返回 `ENDPOINT_DEPRECATED`。
 
 ## [3.0.0] - 2026-10-02
 
