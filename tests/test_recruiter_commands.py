@@ -1,9 +1,11 @@
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
 from boss_agent_cli.main import cli
+from boss_agent_cli.platforms.zhipin_recruiter import BossRecruiterPlatform
+from boss_agent_cli.schema.error_codes import ERROR_CODES
 from boss_agent_cli.services.resume_parser import parse_resume
 
 
@@ -444,6 +446,30 @@ def test_recruiter_resume_exchange_reports_error_when_platform_rejects(mock_auth
 
 @patch("boss_agent_cli.commands.recruiter.resume.get_recruiter_platform_instance")
 @patch("boss_agent_cli.commands.recruiter.resume.AuthManager")
+def test_recruiter_resume_retired_endpoint_envelope(mock_auth_cls, mock_platform_cls):
+	client = MagicMock()
+	platform = BossRecruiterPlatform(client)
+	client.view_geek.return_value = {
+		"code": 1,
+		"message": "旧简历接口已下线，请关闭相关插件后刷新页面重试",
+		"__cli_endpoint_hint__": "https://www.zhipin.com/wapi/zpjob/view/geek/info",
+	}
+	mock_platform_cls.return_value = platform
+	result = _invoke("hr", "resume", "geek-1", "--job-id", "job-1", "--security-id", "sec-1")
+	assert result.exit_code == 1
+	parsed = json.loads(result.output)
+	_assert_error_contract(
+		parsed,
+		code="ENDPOINT_DEPRECATED",
+		message="旧简历接口已下线，请关闭相关插件后刷新页面重试",
+		recoverable=False,
+		recovery_action=ERROR_CODES["ENDPOINT_DEPRECATED"]["recovery_action"],
+	)
+	assert parsed["error"]["details"]["tracking_issue"].endswith("/issues/472")
+
+
+@patch("boss_agent_cli.commands.recruiter.resume.get_recruiter_platform_instance")
+@patch("boss_agent_cli.commands.recruiter.resume.AuthManager")
 def test_recruiter_resume_parse_supports_data_envelope(mock_auth_cls, mock_platform_cls):
 	mock_platform = _ctx_mock(mock_platform_cls)
 	mock_platform.view_geek.return_value = {
@@ -577,6 +603,32 @@ def test_parse_resume_accepts_unwrapped_payload():
 	)
 	assert result["basic"]["name"] == "王五"
 	assert result["expectation"]["position"] == "测试工程师"
+
+
+def test_parse_resume_reads_wasm_education_field_names():
+	result = parse_resume(
+		{
+			"zpData": {
+				"geekDetailInfo": {
+					"geekEduExpList": [
+						{
+							"school": "示例大学",
+							"major": "计算机",
+							"degreeName": "本科",
+							"startDateDesc": "2016.09",
+							"endDateDesc": "2020.06",
+						}
+					],
+				},
+			},
+		}
+	)
+	education = result["education"][0]
+	assert education["school"] == "示例大学"
+	assert education["major"] == "计算机"
+	assert education["degree"] == "本科"
+	assert education["start"] == "2016.09"
+	assert education["end"] == "2020.06"
 
 
 def test_hr_group_rejects_removed_zhilian_platform():
