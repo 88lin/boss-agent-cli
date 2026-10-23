@@ -1068,8 +1068,15 @@ class BossRecruiterClient(_BaseHttpClient):
 			return None
 		return {"code": 0, "zpData": {"geekDetailInfo": info}}
 
-	def chat_geek_info(self, geek_id: str, security_id: str, job_id: int) -> dict[str, Any]:
-		params = {"encryptGeekId": geek_id, "securityId": security_id, "jobId": job_id}
+	def chat_geek_info(self, uid: str, security_id: str, geek_source: int | None = None) -> dict[str, Any]:
+		"""读取沟通页候选人信息。
+
+		侧栏传 uid（friendId）、securityId、geekSource（friendSource）。
+		音视频卡片只传 uid 与 securityId，此时不带 geekSource。
+		"""
+		params: dict[str, Any] = {"uid": uid, "securityId": security_id}
+		if geek_source is not None:
+			params["geekSource"] = geek_source
 		return self._request("GET", ep.BOSS_CHAT_GEEK_INFO_URL, params=params)
 
 	# ── 消息 / 聊天 ──────────────────────────────────────
@@ -1237,8 +1244,8 @@ class BossRecruiterClient(_BaseHttpClient):
 
 	# ── 职位管理 ──────────────────────────────────────────
 
-	def list_jobs(self) -> dict[str, Any]:
-		return self._request("GET", ep.BOSS_JOB_LIST_URL)
+	def list_jobs(self, page: int = 1) -> dict[str, Any]:
+		return self._request("GET", ep.BOSS_JOB_LIST_URL, params={"page": page})
 
 	def job_offline(self, job_id: str) -> dict[str, Any]:
 		data = {"encryptJobId": job_id}
